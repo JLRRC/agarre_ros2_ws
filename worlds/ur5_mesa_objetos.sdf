@@ -1,0 +1,471 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <world name="ur5_mesa_objetos">
+
+    <!-- Gravedad global -->
+    <gravity>0 0 -9.81</gravity>
+
+    <!-- Sol direccional -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Plugins de sistemas de Gazebo (necesarios para sensores, etc.) -->
+    <!-- Física -->
+    <plugin
+      name="gz::sim::systems::Physics"
+      filename="gz-sim-physics-system">
+      <engine>
+        <type>bullet-featherstone</type>
+      </engine>
+    </plugin>
+
+    <!-- Sensores (IMPRESCINDIBLE para que funcionen las cámaras) -->
+    <plugin
+      name="gz::sim::systems::Sensors"
+      filename="gz-sim-sensors-system">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <!-- Broadcasting de escena (útil para GUIs/remotos) -->
+    <plugin
+      name="gz::sim::systems::SceneBroadcaster"
+      filename="gz-sim-scene-broadcaster-system"/>
+
+    <!-- Plano de suelo -->
+    <model name="ground_plane">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>5 5</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>5 5</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Tablero de la mesa -->
+    <model name="mesa_tablero">
+      <static>true</static>
+      <!-- x y z R P Y (altura 0.75 m) -->
+      <pose>0 0 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.8 0.8 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.8 0.8 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.6 0.6 0.6 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Patas de la mesa -->
+    <model name="mesa_pata1">
+      <static>true</static>
+      <pose>0.35 0.35 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.3 0.2 1</ambient>
+            <diffuse>0.4 0.3 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="mesa_pata2">
+      <static>true</static>
+      <pose>0.35 -0.35 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.3 0.2 1</ambient>
+            <diffuse>0.4 0.3 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="mesa_pata3">
+      <static>true</static>
+      <pose>-0.35 0.35 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.3 0.2 1</ambient>
+            <diffuse>0.4 0.3 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="mesa_pata4">
+      <static>true</static>
+      <pose>-0.35 -0.35 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.75</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.3 0.2 1</ambient>
+            <diffuse>0.4 0.3 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Objetos de agarre en la mesa -->
+    <model name="cubo_rojo">
+      <pose>0.20 0.00 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cilindro_verde">
+      <pose>0.00 0.20 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>0.03</radius>
+              <length>0.06</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.03</radius>
+              <length>0.06</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0 1 0 1</ambient>
+            <diffuse>0 1 0 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="caja_azul">
+      <pose>-0.15 -0.15 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.12 0.08 0.02</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.12 0.08 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0 0 1 1</ambient>
+            <diffuse>0 0 1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- UR5 + RG2 desde Ignition Fuel -->
+    <include>
+      <uri>https://fuel.ignitionrobotics.org/1.0/AndrejOrsula/models/ur5_rg2</uri>
+      <name>ur5_rg2</name>
+      <!-- Colocado al borde de la mesa -->
+      <pose>-0.35 0.0 0.82 0 0 0</pose>
+    </include>
+
+  <!-- ========================================================= -->
+  <!-- Estructura de cámaras: 4 postes alrededor de la mesa      -->
+  <!-- y una cámara cenital en el cruce de las vigas superiores. -->
+  <!-- Centro de referencia aprox. de la mesa: x=-0.35, y=0.0    -->
+  <!-- ========================================================= -->
+  <!-- Estructura de 4 postes + 5 cámaras (4 laterales + 1 cenital) -->
+	<!-- Estructura de 4 postes + 5 cámaras RGB-D (4 laterales + 1 cenital) -->
+
+
+    <!-- Estructura de 4 postes + 5 cámaras RGB-D (4 laterales + 1 cenital) -->
+    <model name="camera_rig_mesa">
+      <static>true</static>
+      <!-- Centramos el rig aproximadamente sobre la mesa / UR5 -->
+      <pose>-0.35 0.0 0.0 0 0 0</pose>
+
+      <link name="rig_link">
+        <!-- Postes altos: centro a z=1.4, longitud 2.8 => base ~0.0, cima ~2.8 -->
+        <visual name="poste_frontal_izq">
+          <pose>-0.3 0.3 1.4 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.01</radius>
+              <length>2.8</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+          </material>
+        </visual>
+
+        <visual name="poste_frontal_der">
+          <pose>-0.3 -0.3 1.4 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.01</radius>
+              <length>2.8</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+          </material>
+        </visual>
+
+        <visual name="poste_trasero_izq">
+          <pose>0.3 0.3 1.4 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.01</radius>
+              <length>2.8</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+          </material>
+        </visual>
+
+        <visual name="poste_trasero_der">
+          <pose>0.3 -0.3 1.4 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.01</radius>
+              <length>2.8</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+          </material>
+        </visual>
+
+        <!-- 5 cámaras RGB-D -->
+
+        <!-- Cenital RGB-D -->
+        <sensor name="camera_overhead_rgbd" type="rgbd_camera">
+          <!-- z=2.4, mirando hacia abajo (pitch=-90º) -->
+          <pose>0 0 2.4 0 -1.57 0</pose>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <visualize>true</visualize>
+          <!-- Tópico base: /camera_overhead/image, /camera_overhead/depth_image, ... -->
+          <topic>/camera_overhead</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>5.0</far>
+            </clip>
+          </camera>
+        </sensor>
+
+        <!-- Norte RGB-D (desde y>0 hacia la mesa) -->
+        <sensor name="camera_north_rgbd" type="rgbd_camera">
+          <pose>0.0 0.5 1.8 0 0 3.1416</pose>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <visualize>true</visualize>
+          <topic>/camera_north</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>5.0</far>
+            </clip>
+          </camera>
+        </sensor>
+
+        <!-- Sur RGB-D (desde y<0 hacia la mesa) -->
+        <sensor name="camera_south_rgbd" type="rgbd_camera">
+          <pose>0.0 -0.5 1.8 0 0 0</pose>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <visualize>true</visualize>
+          <topic>/camera_south</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>5.0</far>
+            </clip>
+          </camera>
+        </sensor>
+
+        <!-- Este RGB-D (desde x>0 hacia la mesa) -->
+        <sensor name="camera_east_rgbd" type="rgbd_camera">
+          <pose>0.5 0.0 1.8 0 0 -1.57</pose>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <visualize>true</visualize>
+          <topic>/camera_east</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>5.0</far>
+            </clip>
+          </camera>
+        </sensor>
+
+        <!-- Oeste RGB-D (desde x<0 hacia la mesa) -->
+        <sensor name="camera_west_rgbd" type="rgbd_camera">
+          <pose>-0.5 0.0 1.8 0 0 1.57</pose>
+          <update_rate>30</update_rate>
+          <always_on>true</always_on>
+          <visualize>true</visualize>
+          <topic>/camera_west</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>5.0</far>
+            </clip>
+          </camera>
+        </sensor>
+
+      </link>
+    </model>
+
+
+	
+
+
+
+ </world>
+</sdf>

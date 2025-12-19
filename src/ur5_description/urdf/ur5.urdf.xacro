@@ -1,0 +1,7 @@
+<gazebo>
+  <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+    <robot_namespace>/</robot_namespace>
+    <parameters>$(find ur5_description)/config/ur5_controllers.yaml</parameters>
+  </plugin>
+</gazebo>
+
