@@ -1,3 +1,5 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/agarre_gazebo/CMakeLists.txt
+# Summary: CMake build config for agarre_gazebo package.
 cmake_minimum_required(VERSION 3.8)
 project(agarre_gazebo)
 

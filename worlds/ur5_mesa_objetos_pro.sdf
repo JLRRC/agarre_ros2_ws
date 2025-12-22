@@ -1,0 +1,474 @@
+<?xml version="1.0" ?>
+<!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/worlds/ur5_mesa_objetos_pro.sdf -->
+<!-- Summary: Gazebo world with UR5, table, objects, and cameras (pro). -->
+<sdf version="1.10">
+  <world name="ur5_mesa_objetos_pro">
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.81</gravity>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.95 0.95 0.95 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <!-- Luz sin colisión con GUI -->
+    <light name="sun_world" type="directional">
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>1 1 1 1</diffuse>
+      <specular>0.1 0.1 0.1 1</specular>
+      <direction>-0.5 0.5 -1</direction>
+      <cast_shadows>true</cast_shadows>
+    </light>
+
+    <!-- Suelo -->
+    <model name="ground_plane">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><diffuse>0.85 0.85 0.85 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================
+         MESA PRINCIPAL (AGARRE) — centro (0,0)
+         ====================================================== -->
+    <model name="mesa_pro">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+
+        <collision name="tablero_collision">
+          <pose>0 0 0.75 0 0 0</pose>
+          <geometry><box><size>1.20 0.80 0.05</size></box></geometry>
+        </collision>
+        <visual name="tablero_visual">
+          <pose>0 0 0.75 0 0 0</pose>
+          <geometry><box><size>1.20 0.80 0.05</size></box></geometry>
+          <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
+        </visual>
+
+        <!-- patas -->
+        <collision name="p1c"><pose> 0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p1v"><pose> 0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+
+        <collision name="p2c"><pose> 0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p2v"><pose> 0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+
+        <collision name="p3c"><pose>-0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p3v"><pose>-0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+
+        <collision name="p4c"><pose>-0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p4v"><pose>-0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+
+      </link>
+    </model>
+
+    <!-- Objetos sobre mesa principal -->
+    <model name="cubo_rojo">
+      <static>true</static>
+      <pose>0.15 0.10 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.05 0.05 0.05</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.05 0.05 0.05</size></box></geometry><material><diffuse>0.90 0.10 0.10 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="cilindro_verde">
+      <static>true</static>
+      <pose>-0.10 0.05 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.025</radius><length>0.07</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.025</radius><length>0.07</length></cylinder></geometry><material><diffuse>0.10 0.85 0.10 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="caja_azul">
+      <static>true</static>
+      <pose>0.00 -0.15 0.80 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.10 0.06 0.04</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.10 0.06 0.04</size></box></geometry><material><diffuse>0.10 0.25 0.90 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- PIEZA DINÁMICA en la mesa principal (para agarrar) -->
+    <model name="pieza_pick_mesa">
+      <static>false</static>
+      <pose>-0.45 0.00 0.81 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.08</mass>
+          <inertia>
+            <ixx>0.0002</ixx><iyy>0.0002</iyy><izz>0.0002</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.025</radius><length>0.05</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.025</radius><length>0.05</length></cylinder></geometry><material><diffuse>0.20 0.20 0.20 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ======================================================
+         MESA ROBOT (PEQUEÑA) — ALINEADA con mesa principal
+         - centro x = -1.10, y = 0.00  (alineada en Y)
+         - borde cercano aprox: x = -0.75, mesa principal borde: x = -0.60 -> gap ~0.15
+         ====================================================== -->
+    <model name="mesa_robot">
+      <static>true</static>
+      <pose>-1.10 0.00 0 0 0 0</pose>
+      <link name="link">
+
+        <collision name="tablero_collision">
+          <pose>0 0 0.75 0 0 0</pose>
+          <geometry><box><size>0.70 0.50 0.05</size></box></geometry>
+        </collision>
+        <visual name="tablero_visual">
+          <pose>0 0 0.75 0 0 0</pose>
+          <geometry><box><size>0.70 0.50 0.05</size></box></geometry>
+          <material><diffuse>0.65 0.65 0.65 1</diffuse></material>
+        </visual>
+
+        <!-- patas -->
+        <collision name="p1"><pose> 0.30  0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p1v"><pose> 0.30  0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+
+        <collision name="p2"><pose> 0.30 -0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p2v"><pose> 0.30 -0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+
+        <collision name="p3"><pose>-0.30  0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p3v"><pose>-0.30  0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+
+        <collision name="p4"><pose>-0.30 -0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p4v"><pose>-0.30 -0.20 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+
+        <!-- PAD (zona depósito) cerca del borde hacia mesa principal -->
+</link>
+    </model>
+    <!-- BANDEJA (depósito) - vacía al inicio -->
+    <model name="bandeja_deposito">
+      <static>true</static>
+      <!-- mesa_robot top = 0.775; base de bandeja (0.01) => centro a 0.780 -->
+      <!-- colocada en el lado izquierdo de la mesa_robot (donde estaba el robot aprox) -->
+      <pose>-1.30 0.00 0.780 0 0 0</pose>
+      <link name="link">
+        <!-- base -->
+        <collision name="base_c">
+          <geometry><box><size>0.28 0.22 0.01</size></box></geometry>
+        </collision>
+        <visual name="base_v">
+          <geometry><box><size>0.28 0.22 0.01</size></box></geometry>
+          <material><diffuse>0.95 0.85 0.20 1</diffuse></material>
+        </visual>
+
+        <!-- paredes (altura ~0.07, grosor 0.01) -->
+        <collision name="wall_n_c">
+          <pose>0 0.105 0.035 0 0 0</pose>
+          <geometry><box><size>0.28 0.01 0.07</size></box></geometry>
+        </collision>
+        <visual name="wall_n_v">
+          <pose>0 0.105 0.035 0 0 0</pose>
+          <geometry><box><size>0.28 0.01 0.07</size></box></geometry>
+          <material><diffuse>0.30 0.30 0.30 1</diffuse></material>
+        </visual>
+
+        <collision name="wall_s_c">
+          <pose>0 -0.105 0.035 0 0 0</pose>
+          <geometry><box><size>0.28 0.01 0.07</size></box></geometry>
+        </collision>
+        <visual name="wall_s_v">
+          <pose>0 -0.105 0.035 0 0 0</pose>
+          <geometry><box><size>0.28 0.01 0.07</size></box></geometry>
+          <material><diffuse>0.30 0.30 0.30 1</diffuse></material>
+        </visual>
+
+        <collision name="wall_e_c">
+          <pose>0.135 0 0.035 0 0 0</pose>
+          <geometry><box><size>0.01 0.22 0.07</size></box></geometry>
+        </collision>
+        <visual name="wall_e_v">
+          <pose>0.135 0 0.035 0 0 0</pose>
+          <geometry><box><size>0.01 0.22 0.07</size></box></geometry>
+          <material><diffuse>0.30 0.30 0.30 1</diffuse></material>
+        </visual>
+
+        <collision name="wall_w_c">
+          <pose>-0.135 0 0.035 0 0 0</pose>
+          <geometry><box><size>0.01 0.22 0.07</size></box></geometry>
+        </collision>
+        <visual name="wall_w_v">
+          <pose>-0.135 0 0.035 0 0 0</pose>
+          <geometry><box><size>0.01 0.22 0.07</size></box></geometry>
+          <material><diffuse>0.30 0.30 0.30 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+
+    <!-- PIEZA DINÁMICA sobre PAD (para depositar) -->
+<!-- ======================================================
+         BRAZO COMERCIAL: UR5 + RG2 (Universal Robots)
+         - sobre mesa_robot
+         - mirando hacia la mesa principal (yaw = 0)
+         ====================================================== -->
+    <include>
+      <uri>model://ur5_rg2</uri>
+      <name>ur5_rg2</name>
+      <!-- mesa top: 0.775 -->
+      <pose>-0.85 0.00 0.775 0 0 0</pose>
+    </include>
+
+    <!-- ======================================================
+         CAMARAS RGBD
+         FIX REAL: el pitch estaba invertido. Ahora TODAS apuntan a la mesa.
+         NOTA: En gz-sim la cámara mira por el eje +X del sensor.
+         ====================================================== -->
+
+    <!-- Overhead: mirando abajo (pitch +90deg) -->
+    <model name="camera_overhead">
+      <static>true</static>
+      <pose>0.00 0.00 2.60 0 1.5708 0</pose>
+      <link name="link">
+        <sensor name="camera_overhead_rgbd" type="rgbd_camera">
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <topic>/camera_overhead</topic>
+          <camera>
+            <horizontal_fov>0.75</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>10.0</far></clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <!-- Postes en esquinas fuera de mesa -->
+    <!-- yaw a (0,0): NW=-0.668, NE=-2.475, SE=+2.475, SW=+0.668 -->
+    <!-- pitch = +1.05 (~60º) para mirar hacia abajo a la mesa -->
+
+    <model name="camera_north">
+      <static>true</static>
+      <pose>-0.95 0.75 0 0 0 0</pose>
+      <link name="link">
+        <visual name="post_v"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></visual>
+        <collision name="post_c"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></collision>
+
+        <sensor name="camera_north_rgbd" type="rgbd_camera">
+          <pose>0 0 2.90 0 1.05 -0.668</pose>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <topic>/camera_north</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>10.0</far></clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <model name="camera_east">
+      <static>true</static>
+      <pose>0.95 0.75 0 0 0 0</pose>
+      <link name="link">
+        <visual name="post_v"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></visual>
+        <collision name="post_c"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></collision>
+
+        <sensor name="camera_east_rgbd" type="rgbd_camera">
+          <pose>0 0 2.90 0 1.05 -2.475</pose>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <topic>/camera_east</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>10.0</far></clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <model name="camera_south">
+      <static>true</static>
+      <pose>0.95 -0.75 0 0 0 0</pose>
+      <link name="link">
+        <visual name="post_v"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></visual>
+        <collision name="post_c"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></collision>
+
+        <sensor name="camera_south_rgbd" type="rgbd_camera">
+          <pose>0 0 2.90 0 1.05 2.475</pose>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <topic>/camera_south</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>10.0</far></clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <model name="camera_west">
+      <static>true</static>
+      <pose>-0.95 -0.75 0 0 0 0</pose>
+      <link name="link">
+        <visual name="post_v"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></visual>
+        <collision name="post_c"><pose>0 0 1.40 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>2.80</length></cylinder></geometry></collision>
+
+        <sensor name="camera_west_rgbd" type="rgbd_camera">
+          <pose>0 0 2.90 0 1.05 0.668</pose>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <topic>/camera_west</topic>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+            <clip><near>0.05</near><far>10.0</far></clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <!-- DROP_OBJECTS_BEGIN -->
+
+    <model name="drop_obj_01_box_cube">
+      <static>false</static>
+      <pose>0.000 0.000 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.12</mass><inertia><ixx>7.199999999999999e-05</ixx><iyy>7.199999999999999e-05</iyy><izz>7.199999999999999e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><box><size>0.06 0.06 0.06</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.06 0.06 0.06</size></box></geometry><material><diffuse>0.85 0.20 0.20 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_02_box_flat">
+      <static>false</static>
+      <pose>0.040 0.000 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.1</mass><inertia><ixx>3.75e-05</ixx><iyy>9.083333333333335e-05</iyy><izz>0.00011333333333333334</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><box><size>0.1 0.06 0.03</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.1 0.06 0.03</size></box></geometry><material><diffuse>0.20 0.35 0.90 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_03_box_tall">
+      <static>false</static>
+      <pose>-0.040 0.000 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.11</mass><inertia><ixx>0.00014666666666666666</ixx><iyy>0.00014666666666666666</iyy><izz>2.9333333333333336e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><box><size>0.04 0.04 0.12</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.04 0.04 0.12</size></box></geometry><material><diffuse>0.20 0.80 0.20 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_04_cyl_long">
+      <static>false</static>
+      <pose>0.000 0.040 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.1</mass><inertia><ixx>0.00017333333333333336</ixx><iyy>0.00017333333333333336</iyy><izz>2e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><cylinder><radius>0.02</radius><length>0.14</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.02</radius><length>0.14</length></cylinder></geometry><material><diffuse>0.35 0.35 0.35 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_05_cyl_mid">
+      <static>false</static>
+      <pose>0.000 -0.040 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.09</mass><inertia><ixx>6.825e-05</ixx><iyy>6.825e-05</iyy><izz>4.0499999999999995e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry><material><diffuse>0.95 0.55 0.10 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_06_cyl_puck">
+      <static>false</static>
+      <pose>0.050 0.050 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.08</mass><inertia><ixx>4.316666666666667e-05</ixx><iyy>4.316666666666667e-05</iyy><izz>8.099999999999999e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><cylinder><radius>0.045</radius><length>0.02</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.045</radius><length>0.02</length></cylinder></geometry><material><diffuse>0.55 0.25 0.70 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_07_sphere_big">
+      <static>false</static>
+      <pose>-0.050 0.050 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.09</mass><inertia><ixx>4.410000000000001e-05</ixx><iyy>4.410000000000001e-05</iyy><izz>4.410000000000001e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><sphere><radius>0.035</radius></sphere></geometry></collision>
+        <visual name="v"><geometry><sphere><radius>0.035</radius></sphere></geometry><material><diffuse>0.95 0.95 0.95 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_08_sphere_small">
+      <static>false</static>
+      <pose>0.050 -0.050 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.05</mass><inertia><ixx>8.000000000000001e-06</ixx><iyy>8.000000000000001e-06</iyy><izz>8.000000000000001e-06</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><sphere><radius>0.02</radius></sphere></geometry></collision>
+        <visual name="v"><geometry><sphere><radius>0.02</radius></sphere></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_09_box_bar">
+      <static>false</static>
+      <pose>-0.050 -0.050 1.925 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.1</mass><inertia><ixx>1.4999999999999999e-05</ixx><iyy>0.00017083333333333336</iyy><izz>0.00017083333333333336</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><box><size>0.14 0.03 0.03</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.14 0.03 0.03</size></box></geometry><material><diffuse>0.95 0.85 0.20 1</diffuse></material></visual>
+      </link>
+    </model>
+
+
+    <model name="drop_obj_10_cross">
+      <static>false</static>
+      <pose>0.080 0.000 1.925 0 0 0</pose>
+
+      <link name="link_a">
+        <pose>0 0 0 0 0 0</pose>
+        <inertial><mass>0.07</mass><inertia><ixx>8.925e-05</ixx><iyy>8.925e-05</iyy><izz>0.000168</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c1"><geometry><box><size>0.12 0.03 0.03</size></box></geometry></collision>
+        <visual name="v1"><geometry><box><size>0.12 0.03 0.03</size></box></geometry><material><diffuse>0.10 0.75 0.75 1</diffuse></material></visual>
+      </link>
+
+      <link name="link_b">
+        <pose>0 0 0 0 0 0</pose>
+        <inertial><mass>0.07</mass><inertia><ixx>8.925e-05</ixx><iyy>8.925e-05</iyy><izz>0.000168</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c2"><geometry><box><size>0.03 0.12 0.03</size></box></geometry></collision>
+        <visual name="v2"><geometry><box><size>0.03 0.12 0.03</size></box></geometry><material><diffuse>0.10 0.75 0.75 1</diffuse></material></visual>
+      </link>
+
+      <joint name="fixed_joint" type="fixed">
+        <parent>link_a</parent>
+        <child>link_b</child>
+      </joint>
+    </model>
+
+    <!-- DROP_OBJECTS_END -->
+
+  </world>
+</sdf>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_bringup/package.xml -->
+<!-- Summary: ROS 2 package manifest for ur5_bringup. -->
+<package format="3">
+  <name>ur5_bringup</name>
+  <version>0.1.0</version>
+  <description>Bringup launch files for UR5 simulation/control.</description>
+  <maintainer email="laboratorio@example.com">laboratorio</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ur5_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

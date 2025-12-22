@@ -1,3 +1,6 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/grasp_pose_publisher/setup.py
+# Summary: Setuptools setup for grasp_pose_publisher package.
+"""Setuptools entry point for the grasp_pose_publisher package."""
 from setuptools import setup
 
 package_name = 'grasp_pose_publisher'
@@ -24,4 +27,3 @@ setup(
         ],
     },
 )
-

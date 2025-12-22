@@ -1,4 +1,6 @@
 <?xml version="1.0" ?>
+<!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/src/agarre_gazebo/worlds/mesa_agarre_rgbd.original.sdf -->
+<!-- Summary: Original Gazebo world for table grasping with RGB-D camera. -->
 <sdf version="1.8">
   <world name="mesa_agarre_rgbd">
 

@@ -1,0 +1,35 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_bringup/config/ur5_mock_controllers.yaml
+# Summary: Mock controller configuration for UR5 ros2_control.
+controller_manager:
+  ros__parameters:
+    update_rate: 125
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    gripper_controller:
+      type: forward_command_controller/ForwardCommandController
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+gripper_controller:
+  ros__parameters:
+    joints:
+      - rg2_finger_joint1
+      - rg2_finger_joint2
+    interface_name: position

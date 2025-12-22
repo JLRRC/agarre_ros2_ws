@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/run_experiment_rgbd.sh
+# Summary: Launches RGB-D training experiment in agarre_inteligente.
 set -e
 
 cd "$HOME/TFM/agarre_inteligente"

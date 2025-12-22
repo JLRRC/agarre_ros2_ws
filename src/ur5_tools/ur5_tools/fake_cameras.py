@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_tools/ur5_tools/fake_cameras.py
+# Summary: ROS 2 node that publishes synthetic camera images.
+"""ROS 2 node that publishes synthetic camera images for testing."""
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -10,6 +13,7 @@ import time
 
 
 class FakeCamerasNode(Node):
+    """Publish synthetic RGB images on configured camera topics."""
     def __init__(self):
         super().__init__('fake_cameras')
 
@@ -87,6 +91,7 @@ class FakeCamerasNode(Node):
 
 
 def main(args=None):
+    """Entry point for the fake cameras node."""
     rclpy.init(args=args)
     node = FakeCamerasNode()
     try:

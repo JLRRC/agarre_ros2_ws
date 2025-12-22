@@ -1,3 +1,6 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_tools/setup.py
+# Summary: Setuptools setup for ur5_tools package.
+"""Setuptools entry point for the ur5_tools package."""
 from setuptools import setup
 
 package_name = 'ur5_tools'
@@ -16,7 +19,7 @@ setup(
     maintainer='laboratorio',
     maintainer_email='jesus.lozano.rodriguez@gmail.com',
     description='Tools for UR5 simulation (camera capture, etc.)',
-    license='TODO: License declaration',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

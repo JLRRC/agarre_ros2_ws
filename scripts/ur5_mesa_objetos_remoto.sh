@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/ur5_mesa_objetos_remoto.sh
+# Summary: Runs Gazebo headless with the UR5 table world.
 set -e
 
 # Workspace del entorno ROS 2 + Gazebo del TFM
@@ -16,7 +18,7 @@ else
 fi
 
 echo "[INFO] Configurando rutas de recursos para Gazebo (GZ_SIM_RESOURCE_PATH)..."
-export GZ_SIM_RESOURCE_PATH="$WS_DIR/worlds:$WS_DIR/install:$GZ_SIM_RESOURCE_PATH"
+export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install:${GZ_SIM_RESOURCE_PATH:-}"
 export IGN_GAZEBO_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH"
 
 cd "$WS_DIR"

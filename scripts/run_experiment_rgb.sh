@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/run_experiment_rgb.sh
+# Summary: Launches RGB training experiment in agarre_inteligente.
 set -e
 
 # Ir al repo del TFM

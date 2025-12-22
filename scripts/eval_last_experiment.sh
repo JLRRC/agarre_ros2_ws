@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/eval_last_experiment.sh
+# Summary: Runs evaluation of best epochs in agarre_inteligente.
 set -e
 
 cd "$HOME/TFM/agarre_inteligente"
