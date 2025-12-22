@@ -1,35 +1,53 @@
 #!/usr/bin/env bash
-set -e
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/run_panel.sh
+# Summary: Cold boot launcher for the main Qt panel.
+set -euo pipefail
 
-# Ruta al workspace
-WS_DIR="$HOME/TFM/agarre_ros2_ws"
+WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
+LOG_DIR="$WS_DIR/log"
+mkdir -p "$LOG_DIR"
 
-echo "[INFO] Cerrando procesos previos del panel / Gazebo / bridge (si existen)..."
+echo "[INFO] COLD BOOT previo (matando Gazebo/Bridge/Rosbag si estuvieran vivos)..."
+pkill -f "ros2 bag record"     >/dev/null 2>&1 || true
+pkill -f "ros_gz_bridge"       >/dev/null 2>&1 || true
+pkill -f "parameter_bridge"    >/dev/null 2>&1 || true
+pkill -f "gz sim"              >/dev/null 2>&1 || true
+pkill -f "gz gui"              >/dev/null 2>&1 || true
+pkill -f "gzserver"            >/dev/null 2>&1 || true
+pkill -f "gzclient"            >/dev/null 2>&1 || true
+sleep 0.3
 
-# Matar panel Qt antiguo
-pkill -f "ur5_qt_panel/main_panel.py" 2>/dev/null || true
-
-# Matar Gazebo lanzado por nuestros scripts (gz sim ...)
-pkill -f "gz sim" 2>/dev/null || true
-
-# Matar bridge ros_gz_bridge
-pkill -f "ros2 run ros_gz_bridge" 2>/dev/null || true
-
-# (Opcional) matar scripts nuestros colgados
-pkill -f "run_ur5_world.sh" 2>/dev/null || true
-pkill -f "run_experiment_rgb.sh" 2>/dev/null || true
-pkill -f "run_experiment_rgbd.sh" 2>/dev/null || true
-pkill -f "eval_last_experiment.sh" 2>/dev/null || true
-
-sleep 1
-
-echo "[INFO] Cargando entorno ROS 2 Jazzy..."
+echo "[INFO] Cargando entorno ROS 2 Jazzy + overlay del workspace..."
+# Evita el clásico fallo con set -u y AMENT_TRACE_SETUP_FILES
+set +u
+export AMENT_TRACE_SETUP_FILES="${AMENT_TRACE_SETUP_FILES:-}"
 source /opt/ros/jazzy/setup.bash
+if [[ -f "$WS_DIR/install/setup.bash" ]]; then
+  source "$WS_DIR/install/setup.bash"
+fi
+set -u
 
-echo "[INFO] Cargando overlay del workspace..."
-cd "$WS_DIR"
-source install/setup.bash 2>/dev/null || true
+# Evitar warnings GLX/Qt (forzamos software también con DISPLAY)
+export QT_OPENGL=software
+export QT_XCB_GL_INTEGRATION=none
+export LIBGL_ALWAYS_SOFTWARE=1
+if [[ -z "${DISPLAY:-}" ]]; then
+  export QT_QPA_PLATFORM=offscreen
+fi
 
-echo "[INFO] Lanzando panel Qt (ur5_qt_panel/main_panel.py)..."
-cd "$WS_DIR"
-python3 src/ur5_qt_panel/ur5_qt_panel/main_panel.py
+PANEL_PY="$WS_DIR/src/ur5_qt_panel/ur5_qt_panel/main_panel.py"
+if [[ ! -f "$PANEL_PY" ]]; then
+  PANEL_PY="$WS_DIR/ur5_qt_panel/main_panel.py"
+fi
+
+if [[ ! -f "$PANEL_PY" ]]; then
+  echo "[ERROR] No encuentro main_panel.py"
+  echo "        Probé:"
+  echo "        - $WS_DIR/src/ur5_qt_panel/ur5_qt_panel/main_panel.py"
+  echo "        - $WS_DIR/ur5_qt_panel/main_panel.py"
+  exit 1
+fi
+
+echo "[INFO] Lanzando Panel SUPER PRO: $PANEL_PY"
+export WS_DIR
+exec python3 -u "$PANEL_PY"

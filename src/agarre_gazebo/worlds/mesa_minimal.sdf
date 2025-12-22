@@ -1,4 +1,6 @@
 <?xml version="1.0" ?>
+<!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/src/agarre_gazebo/worlds/mesa_minimal.sdf -->
+<!-- Summary: Minimal Gazebo world for quick tests. -->
 <sdf version="1.7">
   <world name="mesa_minimal">
     <include>

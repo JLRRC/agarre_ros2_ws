@@ -1,3 +1,6 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/grasp_pose_publisher/grasp_pose_publisher/grasp_pose_node.py
+# Summary: Subscribes to overhead camera and publishes a dummy grasp pose.
+"""ROS 2 node that publishes a placeholder grasp pose from camera input."""
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -93,6 +96,7 @@ class GraspPoseNode(Node):
 
 
 def main(args=None):
+    """Entry point for the grasp pose node."""
     rclpy.init(args=args)
     node = GraspPoseNode()
     try:
@@ -105,4 +109,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

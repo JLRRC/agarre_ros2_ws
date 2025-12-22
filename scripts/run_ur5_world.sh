@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/run_ur5_world.sh
+# Summary: Starts Gazebo headless with the UR5 table world.
 set -e
 
 # Workspace del entorno ROS 2 + Gazebo del TFM
@@ -16,7 +18,7 @@ else
 fi
 
 echo "[INFO] Configurando rutas de recursos para Gazebo (GZ_SIM_RESOURCE_PATH)..."
-export GZ_SIM_RESOURCE_PATH="$WS_DIR/worlds:$WS_DIR/install:$GZ_SIM_RESOURCE_PATH"
+export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install:${GZ_SIM_RESOURCE_PATH:-}"
 export IGN_GAZEBO_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH"
 
 cd "$WS_DIR"
@@ -37,4 +39,8 @@ echo "[INFO] (UR5 + mesa + objetos del TFM)"
 # DISPLAY= gz sim -s --headless-rendering "$WORLD_FILE" --verbose
 #
 #
-gz sim  "$WORLD_FILE" --verbose
+#
+env -u DISPLAY \
+  __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+  GZ_RENDER_ENGINE=ogre2 \
+  gz sim -s -r --headless-rendering "$WORLD_FILE" --verbose

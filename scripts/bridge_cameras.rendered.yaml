@@ -1,0 +1,104 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/bridge_cameras.rendered.yaml
+# Summary: Rendered ros_gz_bridge mapping with /clock and camera topics for a specific world.
+# bridge_cameras.yaml (SUPER PRO)
+# Formato correcto: YAML sequence (lista) de mapas.
+# El launcher reemplaza ur5_mesa_objetos_pro por el <world name="..."> real.
+
+- ros_topic_name: "/clock"
+  gz_topic_name: "/world/ur5_mesa_objetos_pro/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+# --------------------------
+# Cameras: IMAGE
+# --------------------------
+- ros_topic_name: "/camera_overhead/image"
+  gz_topic_name: "/camera_overhead/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_north/image"
+  gz_topic_name: "/camera_north/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_south/image"
+  gz_topic_name: "/camera_south/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_east/image"
+  gz_topic_name: "/camera_east/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_west/image"
+  gz_topic_name: "/camera_west/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_lateral/image"
+  gz_topic_name: "/camera_lateral/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+# --------------------------
+# Cameras: DEPTH (si existen en tu mundo)
+# --------------------------
+- ros_topic_name: "/camera_overhead/depth_image"
+  gz_topic_name: "/camera_overhead/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_north/depth_image"
+  gz_topic_name: "/camera_north/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_south/depth_image"
+  gz_topic_name: "/camera_south/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_east/depth_image"
+  gz_topic_name: "/camera_east/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_west/depth_image"
+  gz_topic_name: "/camera_west/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+- ros_topic_name: "/camera_lateral/depth_image"
+  gz_topic_name: "/camera_lateral/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: 0
+
+

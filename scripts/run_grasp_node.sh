@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/run_grasp_node.sh
+# Summary: Sources ROS 2 and runs grasp_pose_publisher.
 set -e
 
 WS_DIR="$HOME/TFM/agarre_ros2_ws"

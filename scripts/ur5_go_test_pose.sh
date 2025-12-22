@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/ur5_go_test_pose.sh
+# Summary: Publishes a test joint trajectory for UR5.
 set -e
 
 source /opt/ros/jazzy/setup.bash

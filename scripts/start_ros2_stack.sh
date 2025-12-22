@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
-set -e
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/start_ros2_stack.sh
+# Summary: Sources ROS 2 and starts ros_gz_bridge for clock and cameras.
+set -Eeuo pipefail
 
-echo "[INFO] Cargando entorno ROS 2 Jazzy..."
-source /opt/ros/jazzy/setup.bash
+WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
+BRIDGE_SCRIPT="$WS_DIR/scripts/run_gz_ros_bridge.sh"
 
-if [ -f "/home/laboratorio/TFM/agarre_ros2_ws/install/setup.bash" ]; then
-  source /home/laboratorio/TFM/agarre_ros2_ws/install/setup.bash
+if [[ ! -x "$BRIDGE_SCRIPT" ]]; then
+  echo "[ERROR] No existe o no es ejecutable: $BRIDGE_SCRIPT" >&2
+  exit 1
 fi
 
-cd /home/laboratorio/TFM/agarre_ros2_ws
-
-echo "[INFO] Lanzando ros_gz_bridge para las cámaras y clock..."
-# Aquí pon el comando real que uses para el bridge
-# Ejemplo:
-ros2 run ros_gz_bridge parameter_bridge \
-  /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock \
-  /camera_overhead/image@sensor_msgs/msg/Image[gz.msgs.Image \
-  /camera_north/image@sensor_msgs/msg/Image[gz.msgs.Image \
-  /camera_south/image@sensor_msgs/msg/Image[gz.msgs.Image \
-  /camera_east/image@sensor_msgs/msg/Image[gz.msgs.Image \
-  /camera_west/image@sensor_msgs/msg/Image[gz.msgs.Image
+exec "$BRIDGE_SCRIPT"
