@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HOST="$(hostname -s 2>/dev/null || hostname)"
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# Ajusta estos patrones a tus nombres reales de host:
+# - MeLE suele ser "laboratorio-Overclock-4C" o similar
+# - PC NVIDIA el tuyo aparece como "laboratorio-MS-7C56"
+EXPECTED="laboratorio-MS-7C56"
+
+if [[ "$HOST" =~ Overclock|MeLE|N300|4C ]]; then
+  EXPECTED="env/mele"
+elif [[ "$HOST" =~ MS-7C56|NVIDIA|RTX|PC ]]; then
+  EXPECTED="env/pc_nvidia"
+else
+  # Si no reconoce el host, no bloquea (solo avisa)
+  echo "[WARN] Host no reconocido ($HOST). No se aplica política de rama." >&2
+  exit 0
+fi
+
+if [[ "$BRANCH" != "$EXPECTED" ]]; then
+  echo "[ERROR] Estás en '$BRANCH' pero este host '$HOST' debe usar '$EXPECTED'." >&2
+  echo "        Solución: git checkout $EXPECTED" >&2
+  exit 1
+fi
+
+exit 0
