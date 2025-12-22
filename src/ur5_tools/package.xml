@@ -1,11 +1,13 @@
 <?xml version="1.0"?>
+<!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_tools/package.xml -->
+<!-- Summary: ROS 2 package manifest for ur5_tools. -->
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ur5_tools</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Utilities and helper nodes for UR5 simulation (camera capture, fake cameras).</description>
   <maintainer email="jesus.lozano.rodriguez@gmail.com">laboratorio</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>

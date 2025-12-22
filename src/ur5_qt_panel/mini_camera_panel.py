@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_qt_panel/mini_camera_panel.py
+# Summary: Mini Qt panel that displays multiple camera topics.
+"""Minimal Qt panel for visualizing multiple camera topics."""
 import sys
 import threading
 
@@ -23,6 +26,7 @@ from PyQt5.QtWidgets import (
 
 # QLabel que se puede actualizar desde callbacks ROS usando señales
 class CameraLabel(QLabel):
+    """QLabel that can be updated from ROS callbacks via Qt signals."""
     image_signal = pyqtSignal(QImage)
 
     def __init__(self, topic_name: str):
@@ -48,6 +52,7 @@ class CameraLabel(QLabel):
 
 # Nodo ROS 2 que se suscribe a todas las cámaras
 class CamerasNode(Node):
+    """ROS 2 node that subscribes to camera image topics."""
     def __init__(self, labels_by_topic):
         super().__init__("mini_camera_panel")
         self.bridge = CvBridge()
@@ -94,6 +99,7 @@ class CamerasNode(Node):
 
 # Ventana principal del mini-panel
 class MiniCameraPanel(QWidget):
+    """Main widget that lays out multiple camera labels."""
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mini Camera Panel – Comprobación cámaras Gazebo/ROS2")
@@ -148,12 +154,14 @@ class MiniCameraPanel(QWidget):
 
 
 def ros_spin_thread(node: CamerasNode):
+    """Spin a ROS 2 node in a background thread."""
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 
 
 def main():
+    """Entry point for the mini camera panel."""
     # Iniciar ROS 2
     rclpy.init(args=None)
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/capture_lateral.py
+# Summary: ROS 2 node that saves one lateral camera image to /tmp.
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
