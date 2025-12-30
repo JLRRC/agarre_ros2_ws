@@ -8,8 +8,34 @@ if [ -f "$HOME/TFM/agarre_ros2_ws/install/setup.bash" ]; then
   source "$HOME/TFM/agarre_ros2_ws/install/setup.bash"
 fi
 
-# Posición de prueba (por ejemplo brazo algo extendido sobre la mesa)
-ros2 topic pub --once /joint_trajectory_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "
+ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
+TSEC="${TSEC:-3}"
+
+# Si Gazebo está activo, prioriza el topic puenteado (ROS->GZ).
+gazebo_running() {
+  pgrep -f "gz sim|gzserver" >/dev/null 2>&1
+}
+
+# Si ros2_control está activo, usa el topic del JointTrajectoryController.
+detect_arm_topic() {
+  local out
+  if [[ "${FORCE_ROS2_CONTROL:-0}" != "1" ]] && gazebo_running; then
+    echo "$ARM_TRAJ_TOPIC"
+    return
+  fi
+  out="$(ros2 control list_controllers 2>/dev/null || true)"
+  if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]]"; then
+    if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]].*\\bactive\\b"; then
+      echo "/joint_trajectory_controller/joint_trajectory"
+      return
+    fi
+  fi
+  echo "$ARM_TRAJ_TOPIC"
+}
+ARM_TRAJ_TOPIC="$(detect_arm_topic)"
+
+# Posición de prueba (brazo algo extendido sobre la mesa)
+ros2 topic pub --once "$ARM_TRAJ_TOPIC" trajectory_msgs/msg/JointTrajectory "
 joint_names:
 - shoulder_pan_joint
 - shoulder_lift_joint
@@ -20,6 +46,6 @@ joint_names:
 points:
 - positions: [0.0, -1.2, 1.3, -0.5, 0.0, 0.0]
   time_from_start:
-    sec: 3
+    sec: $TSEC
     nanosec: 0
 "

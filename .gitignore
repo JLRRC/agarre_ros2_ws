@@ -27,3 +27,10 @@ Thumbs.db
 BORRAR/
 bags/
 experiments/
+.venv*/
+.venv_ai/
+.matplotlib_cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.png

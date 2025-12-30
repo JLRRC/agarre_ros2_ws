@@ -1,19 +1,20 @@
-# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/grasp_pose_publisher/grasp_pose_publisher/grasp_pose_node.py
+# URL: src/grasp_pose_publisher/grasp_pose_publisher/grasp_pose_node.py
 # Summary: Subscribes to overhead camera and publishes a dummy grasp pose.
 """ROS 2 node that publishes a placeholder grasp pose from camera input."""
+from builtin_interfaces.msg import Time
+from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseStamped
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import PoseStamped
-from builtin_interfaces.msg import Time
-from cv_bridge import CvBridge
 
 
 class GraspPoseNode(Node):
     """
-    Nodo ROS 2 muy sencillo que:
+    Nodo ROS 2 muy sencillo que publica una pose de agarre placeholder.
 
     - Se suscribe a /camera_overhead/image (sensor_msgs/msg/Image),
       que viene de Gazebo a través de ros_gz_bridge.

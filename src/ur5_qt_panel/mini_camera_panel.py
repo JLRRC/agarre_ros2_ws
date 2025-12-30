@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 # QLabel que se puede actualizar desde callbacks ROS usando señales
 class CameraLabel(QLabel):
     """QLabel that can be updated from ROS callbacks via Qt signals."""
+
     image_signal = pyqtSignal(QImage)
 
     def __init__(self, topic_name: str):
@@ -53,6 +54,7 @@ class CameraLabel(QLabel):
 # Nodo ROS 2 que se suscribe a todas las cámaras
 class CamerasNode(Node):
     """ROS 2 node that subscribes to camera image topics."""
+
     def __init__(self, labels_by_topic):
         super().__init__("mini_camera_panel")
         self.bridge = CvBridge()
@@ -100,6 +102,7 @@ class CamerasNode(Node):
 # Ventana principal del mini-panel
 class MiniCameraPanel(QWidget):
     """Main widget that lays out multiple camera labels."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mini Camera Panel – Comprobación cámaras Gazebo/ROS2")

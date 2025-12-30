@@ -7,15 +7,20 @@ WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
 LOG_DIR="$WS_DIR/log"
 mkdir -p "$LOG_DIR"
 
-echo "[INFO] COLD BOOT previo (matando Gazebo/Bridge/Rosbag si estuvieran vivos)..."
-pkill -f "ros2 bag record"     >/dev/null 2>&1 || true
-pkill -f "ros_gz_bridge"       >/dev/null 2>&1 || true
-pkill -f "parameter_bridge"    >/dev/null 2>&1 || true
-pkill -f "gz sim"              >/dev/null 2>&1 || true
-pkill -f "gz gui"              >/dev/null 2>&1 || true
-pkill -f "gzserver"            >/dev/null 2>&1 || true
-pkill -f "gzclient"            >/dev/null 2>&1 || true
-sleep 0.3
+PANEL_COLD_BOOT="${PANEL_COLD_BOOT:-1}"
+if [[ "$PANEL_COLD_BOOT" == "1" ]]; then
+  echo "[INFO] COLD BOOT previo (matando Gazebo/Bridge/Rosbag si estuvieran vivos)..."
+  pkill -f "ros2 bag record"     >/dev/null 2>&1 || true
+  pkill -f "ros_gz_bridge"       >/dev/null 2>&1 || true
+  pkill -f "parameter_bridge"    >/dev/null 2>&1 || true
+  pkill -f "gz sim"              >/dev/null 2>&1 || true
+  pkill -f "gz gui"              >/dev/null 2>&1 || true
+  pkill -f "gzserver"            >/dev/null 2>&1 || true
+  pkill -f "gzclient"            >/dev/null 2>&1 || true
+  sleep 0.3
+else
+  echo "[INFO] PANEL_COLD_BOOT=0 -> cold boot inicial omitido."
+fi
 
 echo "[INFO] Cargando entorno ROS 2 Jazzy + overlay del workspace..."
 # Evita el clásico fallo con set -u y AMENT_TRACE_SETUP_FILES

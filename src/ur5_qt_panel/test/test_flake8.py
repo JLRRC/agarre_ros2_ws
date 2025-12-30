@@ -15,14 +15,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import errno
+from pathlib import Path
+
 from ament_flake8.main import main_with_errors
+from flake8 import checker as flake8_checker
 import pytest
+
+flake8_checker.SERIAL_RETRY_ERRNOS.update({errno.EPERM, errno.EACCES})
 
 
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8():
-    rc, errors = main_with_errors(argv=[])
+    package_root = Path(__file__).resolve().parents[1]
+    config = package_root / 'setup.cfg'
+    argv = []
+    if config.is_file():
+        argv.extend(['--config', str(config)])
+    rc, errors = main_with_errors(argv=argv)
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + \
         '\n'.join(errors)

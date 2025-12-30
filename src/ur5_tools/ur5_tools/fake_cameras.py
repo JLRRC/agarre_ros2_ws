@@ -2,18 +2,19 @@
 # URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_tools/ur5_tools/fake_cameras.py
 # Summary: ROS 2 node that publishes synthetic camera images.
 """ROS 2 node that publishes synthetic camera images for testing."""
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from sensor_msgs.msg import Image
+import time
 
 import numpy as np
-import time
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Image
 
 
 class FakeCamerasNode(Node):
     """Publish synthetic RGB images on configured camera topics."""
+
     def __init__(self):
         super().__init__('fake_cameras')
 
@@ -48,7 +49,8 @@ class FakeCamerasNode(Node):
 
     def _make_image(self, width: int, height: int, t: float, mode: str) -> Image:
         """
-        Genera una imagen RGB8 sintética:
+        Genera una imagen RGB8 sintética.
+
         - mode='color': gradiente horizontal con banda que se mueve
         - mode='overhead': cuadrícula simple
         """

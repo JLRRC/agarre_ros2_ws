@@ -1,9 +1,10 @@
-# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/grasp_pose_publisher/grasp_pose_publisher/grasp_pose_publisher_node.py
+# URL: src/grasp_pose_publisher/grasp_pose_publisher/grasp_pose_publisher_node.py
 # Summary: Publishes a fixed grasp pose at a steady rate.
 """ROS 2 node that publishes a fixed grasp pose at a steady rate."""
+from geometry_msgs.msg import PoseStamped
+
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
 
 
 class GraspPosePublisher(Node):

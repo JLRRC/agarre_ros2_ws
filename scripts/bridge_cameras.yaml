@@ -34,11 +34,6 @@
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
 
-- ros_topic_name: /camera_lateral/image
-  gz_topic_name: /camera_lateral/image
-  ros_type_name: sensor_msgs/msg/Image
-  gz_type_name: gz.msgs.Image
-  direction: GZ_TO_ROS
 
 # depth_image
 - ros_topic_name: /camera_overhead/depth_image
@@ -53,29 +48,12 @@
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
 
-- ros_topic_name: /camera_south/depth_image
-  gz_topic_name: /camera_south/depth_image
-  ros_type_name: sensor_msgs/msg/Image
-  gz_type_name: gz.msgs.Image
-  direction: GZ_TO_ROS
-
 - ros_topic_name: /camera_east/depth_image
   gz_topic_name: /camera_east/depth_image
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
 
-- ros_topic_name: /camera_west/depth_image
-  gz_topic_name: /camera_west/depth_image
-  ros_type_name: sensor_msgs/msg/Image
-  gz_type_name: gz.msgs.Image
-  direction: GZ_TO_ROS
-
-- ros_topic_name: /camera_lateral/depth_image
-  gz_topic_name: /camera_lateral/depth_image
-  ros_type_name: sensor_msgs/msg/Image
-  gz_type_name: gz.msgs.Image
-  direction: GZ_TO_ROS
 
 # UR5 arm joint trajectory (ROS -> GZ)
 - ros_topic_name: /ur5_arm_joint_trajectory
@@ -96,7 +74,4 @@
   ros_type_name: std_msgs/msg/Float64
   gz_type_name: gz.msgs.Double
   direction: ROS_TO_GZ
-
-
-
 

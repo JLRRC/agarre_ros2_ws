@@ -29,3 +29,7 @@ else
   sleep 0.5
   timeout "${GRIPPER_TIMEOUT:-6}" "$WS_DIR/scripts/ur5_close_gripper.sh" >/dev/null 2>&1 || true
 fi
+
+if [[ -f "$WS_DIR/scripts/ur5_report_dimensions.py" ]]; then
+  python3 "$WS_DIR/scripts/ur5_report_dimensions.py" || true
+fi

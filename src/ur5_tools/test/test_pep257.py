@@ -15,12 +15,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 from ament_pep257.main import main
 import pytest
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.linter
 @pytest.mark.pep257
 def test_pep257():
-    rc = main(argv=['.', 'test'])
+    rc = main(argv=[str(_PACKAGE_ROOT), 'test'])
     assert rc == 0, 'Found code style errors / warnings'

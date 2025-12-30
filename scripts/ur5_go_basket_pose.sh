@@ -5,14 +5,42 @@ set -Eeuo pipefail
 
 WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
 ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
+BASKET_ENV="${BASKET_ENV:-$WS_DIR/scripts/ur5_basket_pose.env}"
 
 # Pose sobre la cesta (ajusta si quieres otra postura)
-BASKET_POS_0="${BASKET_POS_0:-1.57}"
-BASKET_POS_1="${BASKET_POS_1:--1.1}"
-BASKET_POS_2="${BASKET_POS_2:-1.1}"
-BASKET_POS_3="${BASKET_POS_3:--0.9}"
-BASKET_POS_4="${BASKET_POS_4:-0.0}"
-BASKET_POS_5="${BASKET_POS_5:-0.0}"
+DEFAULT_BASKET_POS_0="3.142"
+DEFAULT_BASKET_POS_1="0.141"
+DEFAULT_BASKET_POS_2="1.688"
+DEFAULT_BASKET_POS_3="-0.281"
+DEFAULT_BASKET_POS_4="-1.548"
+DEFAULT_BASKET_POS_5="0.016"
+BASKET_POS_0="${BASKET_POS_0:-$DEFAULT_BASKET_POS_0}"
+BASKET_POS_1="${BASKET_POS_1:-$DEFAULT_BASKET_POS_1}"
+BASKET_POS_2="${BASKET_POS_2:-$DEFAULT_BASKET_POS_2}"
+BASKET_POS_3="${BASKET_POS_3:-$DEFAULT_BASKET_POS_3}"
+BASKET_POS_4="${BASKET_POS_4:-$DEFAULT_BASKET_POS_4}"
+BASKET_POS_5="${BASKET_POS_5:-$DEFAULT_BASKET_POS_5}"
+if [[ -f "$BASKET_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$BASKET_ENV"
+fi
+
+# Si la CESTA guardada es todo ceros, usa los defaults.
+all_zero=1
+for v in "$BASKET_POS_0" "$BASKET_POS_1" "$BASKET_POS_2" "$BASKET_POS_3" "$BASKET_POS_4" "$BASKET_POS_5"; do
+  if awk "BEGIN {exit !(($v < -0.001) || ($v > 0.001))}"; then
+    all_zero=0
+  fi
+done
+if [[ "$all_zero" == "1" ]]; then
+  echo "[ROBOT] WARN: CESTA guardada es todo 0. Uso defaults."
+  BASKET_POS_0="$DEFAULT_BASKET_POS_0"
+  BASKET_POS_1="$DEFAULT_BASKET_POS_1"
+  BASKET_POS_2="$DEFAULT_BASKET_POS_2"
+  BASKET_POS_3="$DEFAULT_BASKET_POS_3"
+  BASKET_POS_4="$DEFAULT_BASKET_POS_4"
+  BASKET_POS_5="$DEFAULT_BASKET_POS_5"
+fi
 TSEC="${TSEC:-3}"
 BASKET_TIMEOUT="${BASKET_TIMEOUT:-10}"
 
@@ -24,6 +52,29 @@ export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-$WS_DIR
 source /opt/ros/jazzy/setup.bash
 [[ -f "$WS_DIR/install/setup.bash" ]] && source "$WS_DIR/install/setup.bash"
 set -u
+
+# Si Gazebo está activo, prioriza el topic puenteado (ROS->GZ).
+gazebo_running() {
+  pgrep -f "gz sim|gzserver" >/dev/null 2>&1
+}
+
+# Si ros2_control está activo, usa el topic del JointTrajectoryController.
+detect_arm_topic() {
+  local out
+  if [[ "${FORCE_ROS2_CONTROL:-0}" != "1" ]] && gazebo_running; then
+    echo "$ARM_TRAJ_TOPIC"
+    return
+  fi
+  out="$(ros2 control list_controllers 2>/dev/null || true)"
+  if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]]"; then
+    if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]].*\\bactive\\b"; then
+      echo "/joint_trajectory_controller/joint_trajectory"
+      return
+    fi
+  fi
+  echo "$ARM_TRAJ_TOPIC"
+}
+ARM_TRAJ_TOPIC="$(detect_arm_topic)"
 
 echo "[ROBOT] Enviando CESTA -> ${ARM_TRAJ_TOPIC} (t=${TSEC}s)"
 if ! timeout "$BASKET_TIMEOUT" ros2 topic pub --once "$ARM_TRAJ_TOPIC" trajectory_msgs/msg/JointTrajectory "{

@@ -10,6 +10,7 @@
         </joint>
         <!-- Arm Links -->
         <link name="base_link">
+            <gravity>false</gravity>
             <visual name="base_link_visual">
                 <geometry>
                     <mesh>
@@ -46,6 +47,7 @@
             </inertial>
         </link>
         <link name="shoulder_link">
+            <gravity>false</gravity>
             <pose relative_to="shoulder_pan_joint">0 0 0 0 0 0</pose>
             <visual name="shoulder_link_visual">
                 <geometry>
@@ -83,6 +85,7 @@
             </inertial>
         </link>
         <link name="upper_arm_link">
+            <gravity>false</gravity>
             <pose relative_to="shoulder_lift_joint">0 0 0 0 0 0</pose>
             <visual name="upper_arm_link_visual">
                 <geometry>
@@ -120,6 +123,7 @@
             </inertial>
         </link>
         <link name="forearm_link">
+            <gravity>false</gravity>
             <pose relative_to="elbow_joint">0 0 0 0 0 0</pose>
             <visual name="forearm_link_visual">
                 <geometry>
@@ -157,6 +161,7 @@
             </inertial>
         </link>
         <link name="wrist_1_link">
+            <gravity>false</gravity>
             <pose relative_to="wrist_1_joint">0 0 0 0 0 0</pose>
             <visual name="wrist_1_link_visual">
                 <geometry>
@@ -194,6 +199,7 @@
             </inertial>
         </link>
         <link name="wrist_2_link">
+            <gravity>false</gravity>
             <pose relative_to="wrist_2_joint">0 0 0 0 0 0</pose>
             <visual name="wrist_2_link_visual">
                 <geometry>
@@ -231,6 +237,7 @@
             </inertial>
         </link>
         <link name="wrist_3_link">
+            <gravity>false</gravity>
             <pose relative_to="wrist_3_joint">0 0 0 0 0 0</pose>
             <visual name="wrist_3_link_visual">
                 <geometry>
@@ -396,6 +403,7 @@
         </joint>
         <!-- Hand Links -->
         <link name="rg2_hand">
+            <gravity>false</gravity>
             <pose relative_to="ur5_hand_joint">0 0 0 0 0 0</pose>
             <visual name="rg2_hand_visual">
                 <pose>0 0 0 0 0 0</pose>
@@ -435,6 +443,7 @@
             </inertial>
         </link>
         <link name="rg2_leftfinger">
+            <gravity>false</gravity>
             <pose relative_to="rg2_finger_joint1">0 0 0 0 0 0</pose>
             <visual name="rg2_leftfinger_visual">
                 <geometry>
@@ -472,6 +481,7 @@
             </inertial>
         </link>
         <link name="rg2_rightfinger">
+            <gravity>false</gravity>
             <pose relative_to="rg2_finger_joint2">0 0 0 0 0 0</pose>
             <visual name="rg2_rightfinger_visual">
                 <pose>0 0 0 3.141592653589793 0 0</pose>
@@ -553,6 +563,7 @@
         </joint>
         <!-- End-effector -->
         <link name="tool0">
+            <gravity>false</gravity>
             <pose relative_to="end_effector_frame_fixed_joint">0 0 0 0 0 0</pose>
         </link>
         <joint name="end_effector_frame_fixed_joint" type="fixed">
@@ -625,20 +636,152 @@
             <position_cmd_min>-20</position_cmd_min>
             <position_cmd_max>20</position_cmd_max>
         </plugin>
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+        </plugin>
 
         <plugin
             filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
             <joint_name>rg2_finger_joint1</joint_name>
-            <topic>rg2_finger_joint1_cmd</topic>
+            <topic>/rg2_finger_joint1_cmd</topic>
             <p_gain>50</p_gain>
         </plugin>
         <plugin
             filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
             <joint_name>rg2_finger_joint2</joint_name>
-            <topic>rg2_finger_joint2_cmd</topic>
+            <topic>/rg2_finger_joint2_cmd</topic>
             <p_gain>50</p_gain>
+        </plugin>
+
+        <!-- Detachable joints for pick-and-place demo objects -->
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>cubo_rojo</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/cubo_rojo/attach</attach_topic>
+            <detach_topic>/gripper/cubo_rojo/detach</detach_topic>
+            <output_topic>/gripper/cubo_rojo/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>cilindro_verde</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/cilindro_verde/attach</attach_topic>
+            <detach_topic>/gripper/cilindro_verde/detach</detach_topic>
+            <output_topic>/gripper/cilindro_verde/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>caja_azul</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/caja_azul/attach</attach_topic>
+            <detach_topic>/gripper/caja_azul/detach</detach_topic>
+            <output_topic>/gripper/caja_azul/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>pieza_pick_mesa</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/pieza_pick_mesa/attach</attach_topic>
+            <detach_topic>/gripper/pieza_pick_mesa/detach</detach_topic>
+            <output_topic>/gripper/pieza_pick_mesa/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_01_box_cube</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_01_box_cube/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_01_box_cube/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_01_box_cube/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_02_box_flat</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_02_box_flat/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_02_box_flat/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_02_box_flat/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_03_box_tall</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_03_box_tall/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_03_box_tall/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_03_box_tall/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_04_cyl_long</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_04_cyl_long/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_04_cyl_long/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_04_cyl_long/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_05_cyl_mid</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_05_cyl_mid/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_05_cyl_mid/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_05_cyl_mid/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_06_cyl_puck</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_06_cyl_puck/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_06_cyl_puck/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_06_cyl_puck/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_07_sphere_big</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_07_sphere_big/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_07_sphere_big/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_07_sphere_big/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_08_sphere_small</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_08_sphere_small/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_08_sphere_small/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_08_sphere_small/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_09_box_bar</child_model>
+            <child_link>link</child_link>
+            <attach_topic>/gripper/drop_obj_09_box_bar/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_09_box_bar/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_09_box_bar/state</output_topic>
+        </plugin>
+        <plugin filename="gz-sim-detachable-joint-system"
+                name="gz::sim::systems::DetachableJoint">
+            <parent_link>rg2_hand</parent_link>
+            <child_model>drop_obj_10_cross</child_model>
+            <child_link>link_a</child_link>
+            <attach_topic>/gripper/drop_obj_10_cross/attach</attach_topic>
+            <detach_topic>/gripper/drop_obj_10_cross/detach</detach_topic>
+            <output_topic>/gripper/drop_obj_10_cross/state</output_topic>
         </plugin>
     </model>
 </sdf>
