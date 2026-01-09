@@ -13,9 +13,9 @@
   gz_type_name: gz.msgs.Pose_V
   direction: GZ_TO_ROS
 
-# Ejemplo adicional (si usas ur5_mesa_objetos_pro, descomenta):
-# - ros_topic_name: /world/ur5_mesa_objetos_pro/pose/info
-#   gz_topic_name: /world/ur5_mesa_objetos_pro/pose/info
+# Ejemplo adicional (si usas otro nombre de world, descomenta y ajusta):
+# - ros_topic_name: /world/otro_world/pose/info
+#   gz_topic_name: /world/otro_world/pose/info
 #   ros_type_name: tf2_msgs/msg/TFMessage
 #   gz_type_name: gz.msgs.Pose_V
 #   direction: GZ_TO_ROS

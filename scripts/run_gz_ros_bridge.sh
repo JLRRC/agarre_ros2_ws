@@ -6,7 +6,7 @@ set -Eeuo pipefail
 WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
 LOG_DIR="$WS_DIR/log"
 BASE_YAML="${BASE_YAML:-$WS_DIR/scripts/bridge_cameras.yaml}"
-WORLD_FILE="${WORLD_FILE:-$WS_DIR/worlds/ur5_mesa_objetos_pro.sdf}"
+WORLD_FILE="${WORLD_FILE:-$WS_DIR/worlds/ur5_mesa_objetos.sdf}"
 
 if [[ ! -f "$BASE_YAML" ]]; then
   echo "[ERROR] No existe BASE_YAML: $BASE_YAML" >&2

@@ -1759,9 +1759,14 @@ class ControlPanelV2(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _controllers_ready(self) -> Tuple[bool, str]:
+        if not self._ros_worker_started or not self.ros_worker.node_ready():
+            return False, "nodo ROS no listo"
         if self._ros2_control_available():
             return True, "controller_manager disponible"
-        return False, "controller_manager no disponible"
+        topics = set(self.ros_worker.list_topic_names())
+        if "/ur5_arm_joint_trajectory" in topics:
+            return True, "bridge joint_trajectory activo"
+        return False, "sin controller_manager ni bridge joint_trajectory"
 
     def _schedule_camera_health_check(self, delay_ms: int = 1800) -> None:
         if self._camera_health_retry_scheduled or not self._bridge_running:
@@ -2224,7 +2229,7 @@ class ControlPanelV2(QMainWindow):
                     if full not in DEFAULT_WORLD_CANDIDATES:
                         self.world_combo.addItem(full)
         if self.world_combo.count() == 0:
-            self.world_combo.addItem(os.path.join(WORLDS_DIR, "ur5_mesa_objetos_pro.sdf"))
+            self.world_combo.addItem(os.path.join(WORLDS_DIR, "ur5_mesa_objetos.sdf"))
         self.world_combo.setCurrentIndex(0)
 
     def _fill_bridge_presets(self):
@@ -2693,13 +2698,13 @@ class ControlPanelV2(QMainWindow):
             rsp_log = os.path.join(LOG_DIR, "ur5_rsp.log")
             rotate_log(rsp_log)
             env = f"export ROS_LOG_DIR='{LOG_DIR}/ros' ; "
-            cmd_core = with_line_buffer("ros2 launch ur5_bringup ur5_ros2_control.launch.py use_sim_time:=true")
+            cmd_core = with_line_buffer("ros2 launch ur5_bringup ur5_rsp.launch.py use_sim_time:=true")
             cmd = bash_preamble(self.ws_dir) + env + f"{cmd_core} > '{rsp_log}' 2>&1"
             self.rsp_proc = subprocess.Popen(
                 ["bash", "-lc", cmd],
                 preexec_fn=os.setsid,
             )
-            self._emit_log("[TF] robot_state_publisher lanzado")
+            self._emit_log("[TF] robot_state_publisher lanzado (sin ros2_control)")
         except Exception as exc:
             self._log_error(f"Error lanzando robot_state_publisher: {exc}")
 

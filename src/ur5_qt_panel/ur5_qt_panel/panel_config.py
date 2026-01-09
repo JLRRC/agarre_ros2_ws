@@ -87,7 +87,7 @@ OBJECT_COLORS = {
 }
 
 BASKET_DROP = (-1.30, 0.00, 0.82)
-GZ_WORLD = "ur5_mesa_objetos_pro"
+GZ_WORLD = "ur5_mesa_objetos"
 GRIPPER_ATTACH_PREFIX = "/gripper"
 GZ_PARTITION_FILE = os.path.join(LOG_DIR, "gz_partition.txt")
 
@@ -108,7 +108,6 @@ BRIDGE_BASE_YAML = os.path.join(SCRIPTS_DIR, "bridge_cameras.yaml")
 EGL_VENDOR = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
 
 DEFAULT_WORLD_CANDIDATES = [
-    os.path.join(WORLDS_DIR, "ur5_mesa_objetos_pro.sdf"),
     os.path.join(WORLDS_DIR, "ur5_mesa_objetos.sdf"),
 ]
 

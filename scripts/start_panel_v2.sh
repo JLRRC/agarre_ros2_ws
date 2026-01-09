@@ -14,19 +14,6 @@ err() { echo "[START_PANEL_V2] ERROR: $*" >&2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# --- FIX 1 y 3: Recursos Gazebo y modo headless ---
-export GZ_SIM_RESOURCE_PATH="$WS_DIR/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
-log "GZ_SIM_RESOURCE_PATH set to: $GZ_SIM_RESOURCE_PATH"
-
-# Lanzar Gazebo en modo headless por defecto
-if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
-  log "Lanzando Gazebo en modo GUI"
-  gz sim -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
-else
-  log "Lanzando Gazebo en modo headless"
-  gz sim -s -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
-fi
-
 # Config (puedes exportar estas vars antes de lanzar)
 : "${ROS_DISTRO:=jazzy}"
 : "${PANEL_COLD_BOOT:=1}"          # 1 = mata procesos antes de arrancar
@@ -54,6 +41,19 @@ if [[ "$PANEL_COLD_BOOT" == "1" ]]; then
   pkill -f "ur5_qt_panel"      2>/dev/null || true
   pkill -f "panel_v2.py"       2>/dev/null || true
   pkill -f "main_panel.py"     2>/dev/null || true
+fi
+
+# --- Recursos Gazebo y modo headless ---
+export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+log "GZ_SIM_RESOURCE_PATH set to: $GZ_SIM_RESOURCE_PATH"
+
+# Lanzar Gazebo en modo headless por defecto
+if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
+  log "Lanzando Gazebo en modo GUI"
+  gz sim -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
+else
+  log "Lanzando Gazebo en modo headless"
+  gz sim -s -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
 fi
 
 # --- cargar entorno ROS2 + overlay ---
