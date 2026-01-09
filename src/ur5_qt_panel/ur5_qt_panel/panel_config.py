@@ -62,8 +62,8 @@ EXTRA_OBJECTS = {
     "drop_obj_04_cyl_long": (0.000, 0.040, 1.925),
     "drop_obj_05_cyl_mid": (0.000, -0.040, 1.925),
     "drop_obj_06_cyl_puck": (0.050, 0.050, 1.925),
-    "drop_obj_07_sphere_big": (-0.050, 0.050, 1.925),
-    "drop_obj_08_sphere_small": (0.050, -0.050, 1.925),
+    "drop_obj_07_box_lightblue": (-0.050, 0.050, 1.925),
+    "drop_obj_08_cyl_green": (0.050, -0.050, 1.925),
     "drop_obj_09_box_bar": (-0.050, -0.050, 1.925),
     "drop_obj_10_cross": (0.080, 0.000, 1.925),
 }
@@ -80,8 +80,8 @@ OBJECT_COLORS = {
     "drop_obj_04_cyl_long": "#22c55e",
     "drop_obj_05_cyl_mid": "#06b6d4",
     "drop_obj_06_cyl_puck": "#84cc16",
-    "drop_obj_07_sphere_big": "#eab308",
-    "drop_obj_08_sphere_small": "#f43f5e",
+    "drop_obj_07_box_lightblue": "#93c5fd",
+    "drop_obj_08_cyl_green": "#22c55e",
     "drop_obj_09_box_bar": "#10b981",
     "drop_obj_10_cross": "#06b6d4",
 }

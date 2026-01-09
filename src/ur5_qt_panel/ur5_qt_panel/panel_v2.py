@@ -228,6 +228,30 @@ def _build_pose_stamped(data: Dict[str, object]) -> PoseStamped:
 POSE_HOME_DATA = _make_pose_data((0.18, 0.0, 0.35))
 POSE_TABLE_DATA = _make_pose_data((0.30, -0.35, 0.28))
 POSE_BASKET_DATA = _make_pose_data((0.45, 0.28, 0.32))
+JOINT_TABLE_POSE_RAD = [
+    math.radians(160.0),
+    math.radians(0.0),
+    math.radians(100.0),
+    math.radians(-25.0),
+    math.radians(-90.0),
+    math.radians(60.0),
+]
+JOINT_BASKET_POSE_RAD = [
+    math.radians(180.0),
+    math.radians(30.0),
+    math.radians(170.4),
+    math.radians(0.0),
+    math.radians(-100.0),
+    math.radians(60.0),
+]
+JOINT_HOME_POSE_RAD = [
+    math.radians(0.0),
+    math.radians(0.0),
+    math.radians(0.0),
+    math.radians(0.0),
+    math.radians(0.0),
+    math.radians(0.0),
+]
 PRE_GRASP_POSE_DATA = _make_pose_data((0.28, -0.10, 0.35))
 GRASP_POSE_DATA = _make_pose_data((0.28, -0.10, 0.20))
 TRANSPORT_POSE_DATA = _make_pose_data((0.48, 0.10, 0.40))
@@ -985,6 +1009,8 @@ class ControlPanelV2(QMainWindow):
         self.btn_debug_logs = QPushButton("Debug logs → terminal")
         self.btn_debug_logs.setCheckable(True)
         self.btn_debug_logs.setChecked(self._debug_logs_enabled)
+        self._apply_debug_button_style(self.btn_debug_joints, self._debug_joints_to_stdout)
+        self._apply_debug_button_style(self.btn_debug_logs, self._debug_logs_enabled)
 
         self.btn_start_all.clicked.connect(lambda: self._debounced_btn_action(self.btn_start_all, lambda: self._run_script("start_all.sh", "START ALL")))
         self.btn_stop_all.clicked.connect(lambda: self._debounced_btn_action(self.btn_stop_all, lambda: self._run_script("stop_all.sh", "STOP ALL")))
@@ -1217,10 +1243,15 @@ class ControlPanelV2(QMainWindow):
         self.joint_time.setMaximumWidth(70)
         self.chk_auto_joints = QCheckBox("Auto")
         self.chk_auto_joints.setChecked(True)
+        self.btn_gripper = QPushButton("Cerrar gripper")
+        self.btn_gripper.setCheckable(True)
+        self.btn_gripper.setMinimumHeight(28)
+        self.btn_gripper.clicked.connect(self._toggle_gripper_button)
         manual_top.addWidget(self.btn_send_joints)
         manual_top.addWidget(QLabel("t"))
         manual_top.addWidget(self.joint_time)
         manual_top.addWidget(self.chk_auto_joints)
+        manual_top.addWidget(self.btn_gripper)
         manual_top.addStretch(1)
         manual_layout.addLayout(manual_top)
 
@@ -1396,11 +1427,6 @@ class ControlPanelV2(QMainWindow):
         self.btn_table.clicked.connect(self._go_table)
         self.btn_basket.clicked.connect(self._go_basket)
 
-        self.btn_gripper = QPushButton("Cerrar gripper")
-        self.btn_gripper.setCheckable(True)
-        self.btn_gripper.setMinimumHeight(28)
-        self.btn_gripper.clicked.connect(self._toggle_gripper_button)
-
         self.btn_pick_demo = QPushButton("PICK MESA → CESTA (DEMO)")
         self.btn_pick_demo.setMinimumHeight(32)
         self.btn_pick_demo.clicked.connect(self._run_pick_demo)
@@ -1408,7 +1434,6 @@ class ControlPanelV2(QMainWindow):
         robot_layout.addWidget(self.btn_home)
         robot_layout.addWidget(self.btn_table)
         robot_layout.addWidget(self.btn_basket)
-        robot_layout.addWidget(self.btn_gripper)
         robot_layout.addWidget(self.btn_pick_demo)
         g_robot.setLayout(robot_layout)
 
@@ -2267,11 +2292,10 @@ class ControlPanelV2(QMainWindow):
         if env_var == "DEBUG_LOGS_TO_STDOUT":
             self._debug_logs_enabled = enabled
             self.btn_debug_logs.setChecked(enabled)
+            self._apply_debug_button_style(self.btn_debug_logs, enabled)
         if env_var == "DEBUG_JOINTS_TO_STDOUT":
             self.btn_debug_joints.setChecked(enabled)
-            self.btn_debug_joints.setStyleSheet(
-                "background:#3b82f6; color:white; border-radius:6px;" if enabled else ""
-            )
+            self._apply_debug_button_style(self.btn_debug_joints, enabled)
             if enabled:
                 self._print_pose_snapshot()
         label = "ON" if enabled else "OFF"
@@ -2481,7 +2505,7 @@ class ControlPanelV2(QMainWindow):
         self._pose_debug_timer.timeout.connect(self._print_pose_snapshot)
         self._pose_debug_timer.start(1000)
         self._log("[DEBUG] Iniciado - snapshots de poses")
-        self.btn_debug_joints.setStyleSheet("background:#3b82f6; color:white; border-radius:6px;")
+        self._apply_debug_button_style(self.btn_debug_joints, True)
 
     def _stop_debug_poses(self):
         """Detiene streaming de poses y joints."""
@@ -2489,8 +2513,13 @@ class ControlPanelV2(QMainWindow):
             self._pose_debug_timer.stop()
             self._pose_debug_timer.deleteLater()
             self._pose_debug_timer = None
-        self.btn_debug_joints.setStyleSheet("")
+        self._apply_debug_button_style(self.btn_debug_joints, False)
         self._log("[DEBUG] Detenido")
+
+    def _apply_debug_button_style(self, button: QPushButton, enabled: bool) -> None:
+        button.setStyleSheet(
+            "background:#3b82f6; color:white; border-radius:6px;" if enabled else ""
+        )
 
     def _print_pose_snapshot(self):
         """Imprime en una línea: TCP, cesta, mesa y objetos en frame world."""
@@ -3180,9 +3209,14 @@ class ControlPanelV2(QMainWindow):
         self._log("[ROBOT] Iniciando movimiento a HOME")
         self._set_status("Moviendo a HOME…")
         self._set_motion_lock(True)
-        # LEGACY: Se reemplazó la llamada a ur5_go_home.sh / action FollowJointTrajectory por MoveIt-only.
-        self._publish_moveit_pose("HOME", POSE_HOME_DATA)
-        self._set_status("HOME enviado a MoveIt")
+        move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
+        ok, info = self._publish_joint_trajectory(JOINT_HOME_POSE_RAD, move_sec)
+        if ok:
+            self._set_status("HOME ejecutado (JointTrajectory)")
+            self._log(f"[ROBOT] HOME: JointTrajectory en {info}")
+        else:
+            self._set_status(f"HOME falló: {info}", error=True)
+            self._log_warning(f"[ROBOT] HOME falló: {info}")
         self._set_motion_lock(False)
 
     def _go_table(self):
@@ -3190,18 +3224,28 @@ class ControlPanelV2(QMainWindow):
         self._log("[ROBOT] Iniciando movimiento a Mesa")
         self._set_status("Moviendo a Mesa…")
         self._set_motion_lock(True)
-        # LEGACY: La secuencia con ur5_go_table_pose.sh / JointTrajectory se considera obsoleta.
-        self._publish_moveit_pose("Mesa", POSE_TABLE_DATA)
-        self._set_status("Mesa enviado a MoveIt")
+        move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
+        ok, info = self._publish_joint_trajectory(JOINT_TABLE_POSE_RAD, move_sec)
+        if ok:
+            self._set_status("Mesa ejecutado (JointTrajectory)")
+            self._log(f"[ROBOT] Mesa: JointTrajectory en {info}")
+        else:
+            self._set_status(f"Mesa falló: {info}", error=True)
+            self._log_warning(f"[ROBOT] Mesa falló: {info}")
         self._set_motion_lock(False)
 
     def _go_basket(self):
         self._log_button("Go Cesta")
         self._set_status("Moviendo a Cesta…")
         self._set_motion_lock(True)
-        # LEGACY: La publicación directa de JointTrajectory quedó en desuso.
-        self._publish_moveit_pose("Cesta", POSE_BASKET_DATA)
-        self._set_status("Cesta enviada a MoveIt")
+        move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
+        ok, info = self._publish_joint_trajectory(JOINT_BASKET_POSE_RAD, move_sec)
+        if ok:
+            self._set_status("Cesta ejecutado (JointTrajectory)")
+            self._log(f"[ROBOT] Cesta: JointTrajectory en {info}")
+        else:
+            self._set_status(f"Cesta falló: {info}", error=True)
+            self._log_warning(f"[ROBOT] Cesta falló: {info}")
         self._set_motion_lock(False)
 
     def _toggle_gripper_button(self, checked: bool):
@@ -3351,7 +3395,7 @@ class ControlPanelV2(QMainWindow):
     def _settle_targets(self) -> Set[str]:
         targets = set()
         for name in DYNAMIC_OBJECTS:
-            if any(name.startswith(p) for p in SETTLE_PATTERNS) or name in SETTLE_MANUAL:
+            if name in SETTLE_MANUAL:
                 targets.add(name)
         return targets
 

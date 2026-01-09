@@ -1014,11 +1014,17 @@ class ControlPanelV2(QMainWindow):
     
     def _cleanup_stray_processes(self):
         """Limpiar procesos fantasma de Gazebo, bridge y rosbag al startup."""
-        # 1. Limpiar archivos de memoria compartida de FastDDS/FastRTPS
+        # 1. Limpiar archivos de memoria compartida de DDS (FastDDS/CycloneDDS)
         try:
-            self._emit_log("[STARTUP] Limpiando /dev/shm (FastDDS)")
+            self._emit_log("[STARTUP] Limpiando /dev/shm (DDS)")
             subprocess.run(
-                ["sh", "-c", "rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* 2>/dev/null || true"],
+                [
+                    "sh",
+                    "-c",
+                    "rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* "
+                    "/dev/shm/cdds_* /dev/shm/cyclonedds_* /dev/shm/ros_* "
+                    "2>/dev/null || true",
+                ],
                 timeout=2,
             )
         except Exception:

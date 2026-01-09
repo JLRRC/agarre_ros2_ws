@@ -490,28 +490,28 @@
     </model>
 
 
-    <model name="drop_obj_07_sphere_big">
+    <model name="drop_obj_07_box_lightblue">
       <static>false</static>
       <pose>-0.050 0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
-        <inertial><mass>0.09</mass><inertia><ixx>4.410000000000001e-05</ixx><iyy>4.410000000000001e-05</iyy><izz>4.410000000000001e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
-        <collision name="c"><geometry><sphere><radius>0.035</radius></sphere></geometry></collision>
-        <visual name="v"><geometry><sphere><radius>0.035</radius></sphere></geometry><material><diffuse>0.95 0.95 0.95 1</diffuse></material></visual>
+        <inertial><mass>0.09</mass><inertia><ixx>5.4e-05</ixx><iyy>5.4e-05</iyy><izz>5.4e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><box><size>0.06 0.06 0.06</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.06 0.06 0.06</size></box></geometry><material><diffuse>0.70 0.85 0.95 1</diffuse></material></visual>
       </link>
     </model>
 
 
-    <model name="drop_obj_08_sphere_small">
+    <model name="drop_obj_08_cyl_green">
       <static>false</static>
       <pose>0.050 -0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
-        <inertial><mass>0.05</mass><inertia><ixx>8.000000000000001e-06</ixx><iyy>8.000000000000001e-06</iyy><izz>8.000000000000001e-06</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
-        <collision name="c"><geometry><sphere><radius>0.02</radius></sphere></geometry></collision>
-        <visual name="v"><geometry><sphere><radius>0.02</radius></sphere></geometry><material><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+        <inertial><mass>0.05</mass><inertia><ixx>1.16e-05</ixx><iyy>1.16e-05</iyy><izz>1.56e-05</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <collision name="c"><geometry><cylinder><radius>0.025</radius><length>0.03</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.025</radius><length>0.03</length></cylinder></geometry><material><diffuse>0.20 0.70 0.40 1</diffuse></material></visual>
       </link>
     </model>
 

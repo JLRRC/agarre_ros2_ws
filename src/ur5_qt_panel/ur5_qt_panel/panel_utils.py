@@ -1429,6 +1429,7 @@ class RosWorker(QObject):
         self._pose_last_wall = 0.0
         self._pose_msg_count = 0
         self._pose_last_entities = 0
+        self._pose_info_empty_logged = False
         self._pubs: Dict[str, object] = {}
         self._fps: Dict[str, List[float]] = {}
         self._frame_count: Dict[str, int] = {}
@@ -1621,9 +1622,19 @@ class RosWorker(QObject):
             if data:
                 self._pose_cache.update(data)
                 self._pose_last_entities = len(data)
+                self._pose_info_empty_logged = False
             else:
                 # Accept pose/info heartbeat even if frame names are missing.
-                self._pose_last_entities = 0
+                self._pose_last_entities = len(transforms)
+                if not self._pose_info_empty_logged and transforms:
+                    sample = transforms[0]
+                    header = getattr(sample, "header", None)
+                    frame_id = getattr(header, "frame_id", "") if header else ""
+                    child_id = getattr(sample, "child_frame_id", "") or ""
+                    self.log.emit(
+                        f"[PHYSICS][POSE_INFO][DIAG] TFMessage sin nombres: frame_id={frame_id or 'n/a'} child_frame_id={child_id or 'n/a'}"
+                    )
+                    self._pose_info_empty_logged = True
             self._pose_last_wall = time.time()
             self._pose_msg_count += 1
 

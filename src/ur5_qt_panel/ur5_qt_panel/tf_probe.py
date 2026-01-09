@@ -51,7 +51,7 @@ class TFProbe(Node):
         dist_base = self._distance(obj_base, tcp_base)
         dist_world = self._distance(obj_pose, tcp_world)
         print(
-            f"tf_counts tf={self.tf_count} static={self.tf_static_count} | "
+            f"[PROBE] tf_counts tf={self.tf_count} static={self.tf_static_count} | "
             f"base={base_msg} ee={ee_msg} | "
             f"obj_world={(self.obj_frame, *self.obj_xyz)} | "
             f"obj_base={self._format_pose(obj_base)} | "
