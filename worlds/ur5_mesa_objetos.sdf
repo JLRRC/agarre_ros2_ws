@@ -47,6 +47,15 @@
           <material><diffuse>0.85 0.85 0.85 1</diffuse></material>
         </visual>
       </link>
+      <plugin
+        filename="gz-sim-pose-publisher-system"
+        name="gz::sim::systems::PosePublisher">
+        <publish_pose>true</publish_pose>
+        <publish_link_pose>false</publish_link_pose>
+        <publish_visual_pose>false</publish_visual_pose>
+        <publish_collision_pose>false</publish_collision_pose>
+        <static_publisher>false</static_publisher>
+      </plugin>
     </model>
 
     <!-- ======================================================

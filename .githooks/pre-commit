@@ -12,7 +12,7 @@ EXPECTED="laboratorio-MS-7C56"
 if [[ "$HOST" =~ Overclock|MeLE|N300|4C ]]; then
   EXPECTED="env/mele"
 elif [[ "$HOST" =~ MS-7C56|NVIDIA|RTX|PC ]]; then
-  EXPECTED="env/pc_nvidia"
+  EXPECTED="env/pc_nvidia.v2"
 else
   # Si no reconoce el host, no bloquea (solo avisa)
   echo "[WARN] Host no reconocido ($HOST). No se aplica política de rama." >&2
