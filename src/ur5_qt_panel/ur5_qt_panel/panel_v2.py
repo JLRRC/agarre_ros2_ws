@@ -450,6 +450,7 @@ class ControlPanelV2(QMainWindow):
         self._manual_pending = False
         self._script_motion_active = False
         self._closing = False
+        self._shutdown_complete = False
         self._last_tcp_world = None
         self._last_tcp_rpy_deg = None
         self._debug_joints_to_stdout = os.environ.get("DEBUG_JOINTS_TO_STDOUT", "0") == "1"
@@ -4717,7 +4718,7 @@ class ControlPanelV2(QMainWindow):
         QTimer.singleShot(200, self._send_joints)
 
     def closeEvent(self, event):
-        if self._closing:
+        if self._shutdown_complete:
             event.accept()
             return
         self._closing = True
@@ -4756,6 +4757,7 @@ class ControlPanelV2(QMainWindow):
             pass
         self._emit_log("[TRACE] Shutdown: workers stopped")
         self._emit_log("[TRACE] Shutdown: done")
+        self._shutdown_complete = True
         super().closeEvent(event)
 
 

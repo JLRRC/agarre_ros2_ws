@@ -1601,6 +1601,11 @@ class RosWorker(QObject):
         data: Dict[str, Tuple[float, float, float]] = {}
         for tf in transforms:
             name = getattr(tf, "child_frame_id", "") or ""
+            if not name:
+                header = getattr(tf, "header", None)
+                frame = getattr(header, "frame_id", "") if header else ""
+                if frame and frame not in ("world", "/world"):
+                    name = frame
             t = getattr(tf, "transform", None)
             if not t or not getattr(t, "translation", None):
                 continue
