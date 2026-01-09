@@ -1,0 +1,11 @@
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0
+    goal_joint_tolerance: 0.001
+    goal_position_tolerance: 0.001
+    goal_orientation_tolerance: 0.001
+planning_plugin: ompl_interface/OMPLPlanner
+request_adapters:
+  - default_planner_request_adapters/AddTimeParameterization
+use_different_state_validity_filter: false

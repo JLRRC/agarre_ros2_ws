@@ -32,10 +32,15 @@ TABLE_PIXEL_AFFINE: Optional[List[List[float]]] = None
 TABLE_PIXEL_RECT: Optional[Dict[str, Tuple[float, float]]] = None
 TABLE_PIXEL_HOMOGRAPHY: Optional[List[List[float]]] = None
 TABLE_CAM_INFO: Optional[Dict[str, object]] = None
+TABLE_OBJECT_XY_MARGIN = float(os.environ.get("TABLE_OBJECT_XY_MARGIN", "0.09"))
+TABLE_OBJECT_Z_MIN = float(os.environ.get("TABLE_OBJECT_Z_MIN", "0.6"))
+TABLE_OBJECT_Z_MAX = float(os.environ.get("TABLE_OBJECT_Z_MAX", "1.55"))
+TABLE_OBJECT_WHITELIST: Optional[List[str]] = None
 SELECTION_SNAP_DIST = float(os.environ.get("PANEL_SELECTION_SNAP_DIST", "0.0"))
 OBJECT_POS_PATH = os.path.join(SCRIPTS_DIR, "object_positions.json")
 UR5_BASE_X = -0.85
 UR5_BASE_Y = 0.0
+UR5_BASE_Z = 0.0
 UR5_REACH_RADIUS = 0.85
 
 TABLE_OBJECTS = {
@@ -44,6 +49,12 @@ TABLE_OBJECTS = {
     "caja_azul": (0.00, -0.15, 0.80),
     "pieza_pick_mesa": (-0.45, 0.00, 0.81),
 }
+ATTACHABLE_OBJECTS = (
+    "cubo_rojo",
+    "cilindro_verde",
+    "caja_azul",
+    "pieza_pick_mesa",
+)
 EXTRA_OBJECTS = {
     "drop_obj_01_box_cube": (0.000, 0.000, 1.925),
     "drop_obj_02_box_flat": (0.040, 0.000, 1.925),
@@ -103,6 +114,9 @@ DEFAULT_WORLD_CANDIDATES = [
 
 DEBUG_FRAME_LOG = bool(int(os.environ.get("PANEL_DEBUG_FRAMES", "0")))
 
+BASE_FRAME = os.environ.get("PANEL_BASE_FRAME")
+WORLD_FRAME = os.environ.get("PANEL_WORLD_FRAME")
+
 ARM_TRAJ_TOPIC_DEFAULT = os.environ.get("ARM_TRAJ_TOPIC", "/ur5_arm_joint_trajectory")
 UR5_JOINT_NAMES = [
     "shoulder_pan_joint",
@@ -118,6 +132,7 @@ GRIPPER_JOINT_NAMES = [
 ]
 UR5_HOME_ENV = os.path.join(SCRIPTS_DIR, "ur5_home_pose.env")
 UR5_HOME_DEFAULT = [0.054, 0.028, 0.016, 0.016, 0.028, 0.016]
+UR5_MODEL_NAME = os.environ.get("UR5_MODEL_NAME", "ur5_rg2")
 JOINT_SLIDER_DEG_MIN = -180.0
 JOINT_SLIDER_DEG_MAX = 180.0
 JOINT_SLIDER_SCALE = 10.0
@@ -126,7 +141,7 @@ DEFAULT_JOINT_MOVE_SEC = 2.0
 ROS_AVAILABLE = False
 try:
     import rclpy
-    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import Image, JointState
     from rosgraph_msgs.msg import Clock

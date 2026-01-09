@@ -1,49 +1,23 @@
 #!/usr/bin/env bash
-# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/ur5_go_home.sh
-# Summary: Moves UR5 to HOME pose with controller checks.
+# Ruta/URL: file:///home/laboratorio/TFM/agarre_ros2_ws/scripts/ur5_go_home.sh
+# Nombre: ur5_go_home.sh
+# Qué hace: Envía una trayectoria "HOME" al joint_trajectory_controller del UR5.
+#           Valida controller_manager y controladores; activa controladores si hace falta.
 set -Eeuo pipefail
 
 WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
-ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
-HOME_ENV="${HOME_ENV:-$WS_DIR/scripts/ur5_home_pose.env}"
+CM="/controller_manager"
+CTRL_JSB="joint_state_broadcaster"
+CTRL_TRAJ="joint_trajectory_controller"
 
 # HOME (ajusta si quieres otra postura)
-DEFAULT_HOME_POS_0="0.054"
-DEFAULT_HOME_POS_1="0.028"
-DEFAULT_HOME_POS_2="0.016"
-DEFAULT_HOME_POS_3="0.016"
-DEFAULT_HOME_POS_4="0.028"
-DEFAULT_HOME_POS_5="0.016"
-HOME_POS_0="${HOME_POS_0:-$DEFAULT_HOME_POS_0}"
-HOME_POS_1="${HOME_POS_1:-$DEFAULT_HOME_POS_1}"
-HOME_POS_2="${HOME_POS_2:-$DEFAULT_HOME_POS_2}"
-HOME_POS_3="${HOME_POS_3:-$DEFAULT_HOME_POS_3}"
-HOME_POS_4="${HOME_POS_4:-$DEFAULT_HOME_POS_4}"
-HOME_POS_5="${HOME_POS_5:-$DEFAULT_HOME_POS_5}"
-if [[ -f "$HOME_ENV" ]]; then
-  # shellcheck disable=SC1090
-  source "$HOME_ENV"
-fi
-
-# Si el HOME guardado es todo ceros, usa los defaults.
-all_zero=1
-for v in "$HOME_POS_0" "$HOME_POS_1" "$HOME_POS_2" "$HOME_POS_3" "$HOME_POS_4" "$HOME_POS_5"; do
-  if awk "BEGIN {exit !(($v < -0.001) || ($v > 0.001))}"; then
-    all_zero=0
-  fi
-done
-if [[ "$all_zero" == "1" ]]; then
-  echo "[ROBOT] WARN: HOME guardado es todo 0. Uso defaults."
-  HOME_POS_0="$DEFAULT_HOME_POS_0"
-  HOME_POS_1="$DEFAULT_HOME_POS_1"
-  HOME_POS_2="$DEFAULT_HOME_POS_2"
-  HOME_POS_3="$DEFAULT_HOME_POS_3"
-  HOME_POS_4="$DEFAULT_HOME_POS_4"
-  HOME_POS_5="$DEFAULT_HOME_POS_5"
-fi
+HOME_POS_0="${HOME_POS_0:-0.0}"
+HOME_POS_1="${HOME_POS_1:--1.57}"
+HOME_POS_2="${HOME_POS_2:-1.57}"
+HOME_POS_3="${HOME_POS_3:--1.57}"
+HOME_POS_4="${HOME_POS_4:--1.57}"
+HOME_POS_5="${HOME_POS_5:-0.0}"
 TSEC="${TSEC:-3}"
-HOME_QUIET="${HOME_QUIET:-1}"
-HOME_TIMEOUT="${HOME_TIMEOUT:-10}"
 
 # Source entorno (robusto)
 set +u
@@ -54,46 +28,63 @@ source /opt/ros/jazzy/setup.bash
 [[ -f "$WS_DIR/install/setup.bash" ]] && source "$WS_DIR/install/setup.bash"
 set -u
 
-# Si Gazebo está activo, prioriza el topic puenteado (ROS->GZ).
-gazebo_running() {
-  pgrep -f "gz sim|gzserver" >/dev/null 2>&1
-}
-
-# Si ros2_control está activo, usa el topic del JointTrajectoryController.
-detect_arm_topic() {
-  local out
-  if [[ "${FORCE_ROS2_CONTROL:-0}" != "1" ]] && gazebo_running; then
-    echo "$ARM_TRAJ_TOPIC"
-    return
-  fi
-  out="$(ros2 control list_controllers 2>/dev/null || true)"
-  if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]]"; then
-    if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]].*\\bactive\\b"; then
-      echo "/joint_trajectory_controller/joint_trajectory"
-      return
-    fi
-  fi
-  echo "$ARM_TRAJ_TOPIC"
-}
-ARM_TRAJ_TOPIC="$(detect_arm_topic)"
-
-# 1) Publica trayectoria al controlador de Gazebo (ROS->GZ bridge)
-echo "[ROBOT] Enviando HOME -> ${ARM_TRAJ_TOPIC} (t=${TSEC}s)"
-tmp_out="$(mktemp)"
-if ! timeout "$HOME_TIMEOUT" ros2 topic pub --once "$ARM_TRAJ_TOPIC" trajectory_msgs/msg/JointTrajectory "{
-  header: {stamp: {sec: 0, nanosec: 0}, frame_id: ''},
-  joint_names: ['shoulder_pan_joint','shoulder_lift_joint','elbow_joint','wrist_1_joint','wrist_2_joint','wrist_3_joint'],
-  points: [
-    { positions: [$HOME_POS_0,$HOME_POS_1,$HOME_POS_2,$HOME_POS_3,$HOME_POS_4,$HOME_POS_5],
-      time_from_start: {sec: $TSEC, nanosec: 0}
-    }
-  ]
-}" >"$tmp_out" 2>&1; then
-  rm -f "$tmp_out"
-  echo "[ROBOT] WARN: HOME no se publicó en ${HOME_TIMEOUT}s."
-  exit 0
+# 1) controller_manager vivo (servicios)
+if ! ros2 service list 2>/dev/null | grep -q "^${CM}/list_controllers$"; then
+  echo "[ROBOT] ERROR: No está disponible ${CM}/list_controllers (controller_manager no accesible)."
+  exit 1
 fi
-if [[ "$HOME_QUIET" != "1" ]]; then
-  cat "$tmp_out" || true
+
+# 2) Asegura controladores (si no están activos, intenta activarlos)
+LC="$(ros2 control list_controllers 2>/dev/null || true)"
+
+if ! echo "$LC" | grep -qE "^${CTRL_JSB}[[:space:]]+joint_state_broadcaster/JointStateBroadcaster"; then
+  echo "[ROBOT] INFO: Cargando ${CTRL_JSB}..."
+  ros2 run controller_manager spawner "$CTRL_JSB" -c "$CM" --controller-manager-timeout 30 --switch-timeout 30 || true
 fi
-rm -f "$tmp_out"
+
+if ! echo "$LC" | grep -qE "^${CTRL_TRAJ}[[:space:]]+joint_trajectory_controller/JointTrajectoryController"; then
+  echo "[ROBOT] INFO: Cargando ${CTRL_TRAJ}..."
+  ros2 run controller_manager spawner "$CTRL_TRAJ" -c "$CM" --controller-manager-timeout 30 --switch-timeout 30 || true
+fi
+
+# Relee estado
+LC2="$(ros2 control list_controllers 2>/dev/null || true)"
+echo "$LC2" | sed -n '1,80p'
+
+if ! echo "$LC2" | grep -qE "^${CTRL_JSB}.*\bactive\b"; then
+  echo "[ROBOT] WARN: ${CTRL_JSB} no está ACTIVE. Intento activar con spawner..."
+  ros2 run controller_manager spawner "$CTRL_JSB" -c "$CM" --activate --controller-manager-timeout 30 --switch-timeout 30 || true
+fi
+
+if ! echo "$LC2" | grep -qE "^${CTRL_TRAJ}.*\bactive\b"; then
+  echo "[ROBOT] WARN: ${CTRL_TRAJ} no está ACTIVE. Intento activar con spawner..."
+  ros2 run controller_manager spawner "$CTRL_TRAJ" -c "$CM" --activate --controller-manager-timeout 30 --switch-timeout 30 || true
+fi
+
+# 3) Espera a action server
+ACTION="/${CTRL_TRAJ}/follow_joint_trajectory"
+echo "[ROBOT] Esperando action server: $ACTION"
+for i in {1..50}; do
+  if ros2 action list 2>/dev/null | grep -q "^${ACTION}$"; then
+    break
+  fi
+  sleep 0.1
+done
+
+if ! ros2 action list 2>/dev/null | grep -q "^${ACTION}$"; then
+  echo "[ROBOT] ERROR: No aparece el action server $ACTION"
+  exit 1
+fi
+
+# 4) Enviar objetivo HOME
+echo "[ROBOT] Enviando HOME -> ${CTRL_TRAJ} (t=${TSEC}s)"
+ros2 action send_goal "$ACTION" control_msgs/action/FollowJointTrajectory "{
+  trajectory: {
+    joint_names: ['shoulder_pan_joint','shoulder_lift_joint','elbow_joint','wrist_1_joint','wrist_2_joint','wrist_3_joint'],
+    points: [
+      { positions: [$HOME_POS_0,$HOME_POS_1,$HOME_POS_2,$HOME_POS_3,$HOME_POS_4,$HOME_POS_5],
+        time_from_start: {sec: $TSEC, nanosec: 0}
+      }
+    ]
+  }
+}" --feedback

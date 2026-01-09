@@ -2,7 +2,23 @@
 # Summary: Base ros_gz_bridge mapping for RGB and depth camera topics.
 # bridge_cameras.yaml  (BASE)
 # OJO: El /clock lo genera el panel en un YAML runtime con el nombre real del world.
-# Aquí dejamos SOLO cámaras RGB + depth (GZ_TO_ROS).
+# Aquí dejamos cámaras RGB + depth (GZ_TO_ROS) y pose/info por defecto.
+
+
+# Pose info (debe haber una entrada por cada world_name real que se use)
+# Copia/duplica la siguiente sección para cada nombre de mundo:
+- ros_topic_name: /world/ur5_mesa_objetos/pose/info
+  gz_topic_name: /world/ur5_mesa_objetos/pose/info
+  ros_type_name: tf2_msgs/msg/TFMessage
+  gz_type_name: gz.msgs.Pose_V
+  direction: GZ_TO_ROS
+
+# Ejemplo adicional (si usas ur5_mesa_objetos_pro, descomenta):
+# - ros_topic_name: /world/ur5_mesa_objetos_pro/pose/info
+#   gz_topic_name: /world/ur5_mesa_objetos_pro/pose/info
+#   ros_type_name: tf2_msgs/msg/TFMessage
+#   gz_type_name: gz.msgs.Pose_V
+#   direction: GZ_TO_ROS
 
 - ros_topic_name: /camera_overhead/image
   gz_topic_name: /camera_overhead/image
@@ -74,4 +90,3 @@
   ros_type_name: std_msgs/msg/Float64
   gz_type_name: gz.msgs.Double
   direction: ROS_TO_GZ
-

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ur5_moveit_config</name>
+  <version>0.1.0</version>
+  <description>Minimal MoveIt 2 configuration for the UR5 robot.</description>
+  <license>Apache-2.0</license>
+
+  <maintainer email="root@todo.todo">TODO</maintainer>
+  <author email="root@todo.todo">TODO</author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <build_depend>rclcpp</build_depend>
+  <build_depend>moveit_ros_move_group</build_depend>
+  <build_depend>moveit_ros_planning</build_depend>
+  <build_depend>moveit_ros_planning_interface</build_depend>
+  <build_depend>moveit_ros_visualization</build_depend>
+  <build_depend>moveit_msgs</build_depend>
+  <build_depend>ur_description</build_depend>
+
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_ros_planning</exec_depend>
+  <exec_depend>moveit_ros_planning_interface</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>ur_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

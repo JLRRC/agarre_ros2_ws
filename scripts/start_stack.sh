@@ -26,5 +26,10 @@ WS_DIR="$WS_DIR" "$SCRIPTS_DIR/run_gz_ros_bridge.sh" >/tmp/ros_gz_bridge.log 2>&
 BRIDGE_PID=$!
 sleep 2
 
+echo "[STACK] Lanzando robot_state_publisher (TF)..."
+ros2 launch ur5_bringup ur5_rsp.launch.py >/tmp/ur5_rsp.log 2>&1 &
+RSP_PID=$!
+sleep 1
+
 echo "[STACK] Lanzando panel SUPER PRO..."
 PANEL_COLD_BOOT=0 exec "$SCRIPTS_DIR/run_panel.sh"

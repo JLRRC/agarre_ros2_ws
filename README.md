@@ -12,6 +12,14 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
+## Dependencias ROS 2 (TF2 Python)
+
+Para evitar errores `TypeException` en transformaciones TF2 (PoseStamped/PointStamped), instala el paquete:
+
+```bash
+sudo apt install ros-jazzy-tf2-geometry-msgs
+```
+
 ## Panel (modo PRO)
 ```bash
 ./scripts/run_panel_superpro.sh

@@ -8,12 +8,12 @@ ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
 BASKET_ENV="${BASKET_ENV:-$WS_DIR/scripts/ur5_basket_pose.env}"
 
 # Pose sobre la cesta (ajusta si quieres otra postura)
-DEFAULT_BASKET_POS_0="3.142"
-DEFAULT_BASKET_POS_1="0.141"
-DEFAULT_BASKET_POS_2="1.688"
-DEFAULT_BASKET_POS_3="-0.281"
-DEFAULT_BASKET_POS_4="-1.548"
-DEFAULT_BASKET_POS_5="0.016"
+DEFAULT_BASKET_POS_0="1.57"
+DEFAULT_BASKET_POS_1="-1.1"
+DEFAULT_BASKET_POS_2="1.1"
+DEFAULT_BASKET_POS_3="-0.9"
+DEFAULT_BASKET_POS_4="0.0"
+DEFAULT_BASKET_POS_5="0.0"
 BASKET_POS_0="${BASKET_POS_0:-$DEFAULT_BASKET_POS_0}"
 BASKET_POS_1="${BASKET_POS_1:-$DEFAULT_BASKET_POS_1}"
 BASKET_POS_2="${BASKET_POS_2:-$DEFAULT_BASKET_POS_2}"
@@ -52,29 +52,6 @@ export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-$WS_DIR
 source /opt/ros/jazzy/setup.bash
 [[ -f "$WS_DIR/install/setup.bash" ]] && source "$WS_DIR/install/setup.bash"
 set -u
-
-# Si Gazebo está activo, prioriza el topic puenteado (ROS->GZ).
-gazebo_running() {
-  pgrep -f "gz sim|gzserver" >/dev/null 2>&1
-}
-
-# Si ros2_control está activo, usa el topic del JointTrajectoryController.
-detect_arm_topic() {
-  local out
-  if [[ "${FORCE_ROS2_CONTROL:-0}" != "1" ]] && gazebo_running; then
-    echo "$ARM_TRAJ_TOPIC"
-    return
-  fi
-  out="$(ros2 control list_controllers 2>/dev/null || true)"
-  if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]]"; then
-    if echo "$out" | grep -qE "^joint_trajectory_controller[[:space:]].*\\bactive\\b"; then
-      echo "/joint_trajectory_controller/joint_trajectory"
-      return
-    fi
-  fi
-  echo "$ARM_TRAJ_TOPIC"
-}
-ARM_TRAJ_TOPIC="$(detect_arm_topic)"
 
 echo "[ROBOT] Enviando CESTA -> ${ARM_TRAJ_TOPIC} (t=${TSEC}s)"
 if ! timeout "$BASKET_TIMEOUT" ros2 topic pub --once "$ARM_TRAJ_TOPIC" trajectory_msgs/msg/JointTrajectory "{

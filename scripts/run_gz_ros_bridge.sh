@@ -33,6 +33,12 @@ cat > "$RUNTIME_YAML" <<EOF2
   ros_type_name: rosgraph_msgs/msg/Clock
   gz_type_name: gz.msgs.Clock
   direction: GZ_TO_ROS
+
+- ros_topic_name: /joint_states
+  gz_topic_name: /world/$WORLD_NAME/model/ur5_rg2/joint_state
+  ros_type_name: sensor_msgs/msg/JointState
+  gz_type_name: gz.msgs.Model
+  direction: GZ_TO_ROS
 EOF2
 
 cat "$BASE_YAML" >> "$RUNTIME_YAML"

@@ -1,35 +1,37 @@
 <?xml version="1.0"?>
 <!-- URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_description/urdf/ur5.urdf.xacro -->
 <!-- Summary: UR5 description with mock ros2_control and RG2 gripper joints. -->
-<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
-  <xacro:arg name="name" default="ur5_rg2"/>
-  <xacro:arg name="ur_type" default="ur5"/>
-  <xacro:arg name="tf_prefix" default=""/>
-  <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
-  <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
-  <xacro:arg name="physical_params" default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
-  <xacro:arg name="visual_params" default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
-  <xacro:arg name="safety_limits" default="false"/>
-  <xacro:arg name="safety_pos_margin" default="0.15"/>
-  <xacro:arg name="safety_k_position" default="20"/>
-  <xacro:arg name="force_abs_paths" default="false"/>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur5_rg2">
+  <xacro:property name="ur_type" value="ur5"/>
+  <xacro:property name="safety_limits" value="false"/>
+  <xacro:property name="safety_pos_margin" value="0.15"/>
+  <xacro:property name="safety_k_position" value="20"/>
+  <xacro:property name="force_abs_paths" value="false"/>
 
-  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:property name="ur_pkg_share" value="$(optenv UR_DESCRIPTION_SHARE /opt/ros/jazzy/share/ur_description)"/>
+  <xacro:property name="robot_name" value="ur5_rg2"/>
+  <xacro:property name="tf_prefix_value" value=""/>
+  <xacro:property name="joint_limits_file" value="${ur_pkg_share}/config/${ur_type}/joint_limits.yaml"/>
+  <xacro:property name="kinematics_file" value="${ur_pkg_share}/config/${ur_type}/default_kinematics.yaml"/>
+  <xacro:property name="physical_file" value="${ur_pkg_share}/config/${ur_type}/physical_parameters.yaml"/>
+  <xacro:property name="visual_file" value="${ur_pkg_share}/config/${ur_type}/visual_parameters.yaml"/>
+
+  <xacro:include filename="${ur_pkg_share}/urdf/ur_macro.xacro"/>
 
   <link name="world"/>
 
   <xacro:ur_robot
-    name="$(arg name)"
-    tf_prefix="$(arg tf_prefix)"
+    name="${robot_name}"
+    tf_prefix="${tf_prefix_value}"
     parent="world"
-    joint_limits_parameters_file="$(arg joint_limit_params)"
-    kinematics_parameters_file="$(arg kinematics_params)"
-    physical_parameters_file="$(arg physical_params)"
-    visual_parameters_file="$(arg visual_params)"
-    safety_limits="$(arg safety_limits)"
-    safety_pos_margin="$(arg safety_pos_margin)"
-    safety_k_position="$(arg safety_k_position)"
-    force_abs_paths="$(arg force_abs_paths)"
+    joint_limits_parameters_file="${joint_limits_file}"
+    kinematics_parameters_file="${kinematics_file}"
+    physical_parameters_file="${physical_file}"
+    visual_parameters_file="${visual_file}"
+    safety_limits="${safety_limits}"
+    safety_pos_margin="${safety_pos_margin}"
+    safety_k_position="${safety_k_position}"
+    force_abs_paths="${force_abs_paths}"
     >
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:ur_robot>
@@ -82,7 +84,7 @@
   </joint>
 
   <!-- ros2_control (mock) with UR5 + RG2 joints -->
-  <ros2_control name="$(arg name)" type="system">
+  <ros2_control name="${robot_name}" type="system">
     <hardware>
       <plugin>mock_components/GenericSystem</plugin>
       <param name="state_following_offset">0.0</param>

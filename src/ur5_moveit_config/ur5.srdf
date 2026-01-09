@@ -1,0 +1,13 @@
+<robot name="ur5_rg2">
+  <virtual_joint name="world_joint" parent_frame="world" child_link="base_link" type="fixed" />
+
+  <group name="manipulator">
+    <chain base_link="base_link" tip_link="tool0" />
+    <joint name="shoulder_pan_joint" />
+    <joint name="shoulder_lift_joint" />
+    <joint name="elbow_joint" />
+    <joint name="wrist_1_joint" />
+    <joint name="wrist_2_joint" />
+    <joint name="wrist_3_joint" />
+  </group>
+</robot>

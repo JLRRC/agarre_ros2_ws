@@ -76,12 +76,10 @@ class CamerasNode(Node):
         label = self.labels_by_topic.get(topic)
         if label is None:
             return
-
+        # --- PROTECCIÓN: solo procesar el último frame, sin logs por frame ---
         try:
-            # Convertir sensor_msgs/Image -> OpenCV
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-
             h, w, ch = cv_image.shape
             bytes_per_line = ch * w
             qimg = QImage(
@@ -91,12 +89,11 @@ class CamerasNode(Node):
                 bytes_per_line,
                 QImage.Format_RGB888,
             )
-
             # Emitimos señal para actualizar el QLabel en el hilo de GUI
+            # (No imprimir logs por frame)
             label.image_signal.emit(qimg)
-
-        except Exception as e:
-            self.get_logger().warn(f"Error procesando imagen de {topic}: {e}")
+        except Exception:
+            pass  # Silenciar errores por frame para evitar ráfagas
 
 
 # Ventana principal del mini-panel

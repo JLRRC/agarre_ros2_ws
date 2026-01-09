@@ -25,6 +25,8 @@ setup(
         'console_scripts': [
             'camera_capture = ur5_tools.camera_capture:main',
             'fake_cameras = ur5_tools.fake_cameras:main',
+            'ur5_moveit_bridge = ur5_tools.ur5_moveit_bridge:main',
+            'release_objects_service = ur5_tools.release_objects_service:main',
         ],
     },
 )

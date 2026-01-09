@@ -44,8 +44,8 @@ try:
     import yaml
 except Exception:
     yaml = None
-from panel_config import *
-from panel_utils import *
+from .panel_config import *
+from .panel_utils import *
 
 
 class Frame:
