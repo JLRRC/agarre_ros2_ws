@@ -83,12 +83,10 @@
     <limit lower="0.0" upper="0.04" effort="20" velocity="0.2"/>
   </joint>
 
-  <!-- ros2_control (mock) with UR5 + RG2 joints -->
+  <!-- ros2_control (gz_ros2_control) with UR5 + RG2 joints -->
   <ros2_control name="${robot_name}" type="system">
     <hardware>
-      <plugin>mock_components/GenericSystem</plugin>
-      <param name="state_following_offset">0.0</param>
-      <param name="calculate_dynamics">true</param>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
     </hardware>
 
     <joint name="shoulder_pan_joint">

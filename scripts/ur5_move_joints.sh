@@ -6,7 +6,7 @@
 set -Eeo pipefail
 
 WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
-ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
+ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/joint_trajectory_controller/joint_trajectory}"
 
 if [[ $# -ne 6 ]]; then
   echo "ERROR: Se requieren 6 posiciones articulares" >&2

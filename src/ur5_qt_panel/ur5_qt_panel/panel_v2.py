@@ -24,7 +24,7 @@ try:
 except Exception:
     psutil = None
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QMetaObject
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QMetaObject, Q_ARG
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -72,6 +72,9 @@ from .panel_config import (
     TABLE_SIZE_X,
     TABLE_SIZE_Y,
     SELECTION_SNAP_DIST,
+    AUTO_START_BRIDGE,
+    AUTO_START_BRIDGE_DELAY_MS,
+    AUTO_START_BRIDGE_MAX_RETRIES,
     UR5_HOME_DEFAULT,
     UR5_JOINT_NAMES,
     GRIPPER_JOINT_NAMES,
@@ -371,7 +374,7 @@ class ControlPanelV2(QMainWindow):
             self.camera_info.setStyleSheet("color: #f43f5e; font-weight: bold;")
         elif self._camera_subscribed:
             self.camera_info.setStyleSheet("")
-        QTimer.singleShot(1200, self._camera_health_check)
+        # Timer controlado por _camera_health_timer.
 
     def get_health_report(self) -> dict:
         """Emitir un resumen JSON del pipeline: topics, nodos, servicios, world_name, pose_info, TF, cámaras, controllers, MoveIt2, etc."""
@@ -541,6 +544,8 @@ class ControlPanelV2(QMainWindow):
         self._trace_cached_text = ""
         self._pose_stream_proc = {}  # Slot para proceso de stream de poses
         self._pose_debug_timer: Optional[QTimer] = None
+        self._auto_bridge_attempts = 0
+        self._auto_bridge_timer_scheduled = False
         self.runner = CmdRunner()
         self.runner.line.connect(lambda msg: self._log(msg))
         self._emit_log("[STARTUP] Limpieza de procesos fantasma")
@@ -589,6 +594,7 @@ class ControlPanelV2(QMainWindow):
 
         # Chequeo de estado asíncrono tras 1s
         QTimer.singleShot(1000, self._refresh_status_async)
+        self._request_auto_bridge_start()
     
         # Test inicial de logging
         self._emit_log("[PANEL-V2] Panel iniciado - logging activo")
@@ -617,6 +623,33 @@ class ControlPanelV2(QMainWindow):
             self._log(f"[Panel] ERROR creando publisher MoveIt: {exc}")
             self._moveit_pose_pub = None
 
+    @pyqtSlot()
+    def _request_auto_bridge_start(self) -> None:
+        if not AUTO_START_BRIDGE or self._closing or self._bridge_running:
+            return
+        if self._auto_bridge_timer_scheduled:
+            return
+        self._auto_bridge_timer_scheduled = True
+        if self._auto_bridge_attempts == 0:
+            self._log("[AUTO] Autostart bridge: esperando Gazebo")
+        QTimer.singleShot(AUTO_START_BRIDGE_DELAY_MS, self._auto_bridge_tick)
+
+    def _auto_bridge_tick(self) -> None:
+        self._auto_bridge_timer_scheduled = False
+        if not AUTO_START_BRIDGE or self._closing or self._bridge_running:
+            return
+        gz_ok = self._gz_running or gz_sim_status()[0]
+        if not gz_ok:
+            self._auto_bridge_attempts += 1
+            if self._auto_bridge_attempts >= AUTO_START_BRIDGE_MAX_RETRIES:
+                self._log("[AUTO] Autostart bridge: timeout (Gazebo no disponible)")
+                return
+            self._auto_bridge_timer_scheduled = True
+            QTimer.singleShot(1000, self._auto_bridge_tick)
+            return
+        self._log("[AUTO] Autostart bridge: Gazebo activo")
+        self._start_bridge()
+
     def _get_traj_publisher(self, topic: str):
         if self._moveit_node is None:
             return None
@@ -635,6 +668,8 @@ class ControlPanelV2(QMainWindow):
         if not self.ros_worker.node_ready():
             return False, "Nodo ROS no listo"
         topic = self._select_traj_topic()
+        if not topic:
+            return False, "joint_trajectory_controller no disponible"
         pub = self._get_traj_publisher(topic)
         if not pub:
             return False, "Publisher JointTrajectory no disponible"
@@ -778,10 +813,22 @@ class ControlPanelV2(QMainWindow):
         if settled:
             self._emit_log("[PHYSICS][SETTLE] OK")
             QMetaObject.invokeMethod(self, "_handle_objects_settled", Qt.QueuedConnection)
-            QTimer.singleShot(0, lambda: self._set_status("Objetos estabilizados", error=False))
+            QMetaObject.invokeMethod(
+                self,
+                "_set_status_async",
+                Qt.QueuedConnection,
+                Q_ARG(str, "Objetos estabilizados"),
+                Q_ARG(bool, False),
+            )
         else:
             self._emit_log("[PHYSICS][SETTLE] Timeout: objetos no estabilizados.")
-            QTimer.singleShot(0, lambda: self._set_status("Timeout: objetos no estabilizados", error=True))
+            QMetaObject.invokeMethod(
+                self,
+                "_set_status_async",
+                Qt.QueuedConnection,
+                Q_ARG(str, "Timeout: objetos no estabilizados"),
+                Q_ARG(bool, True),
+            )
         self._settle_worker_active = False
         QTimer.singleShot(0, self._refresh_controls)
 
@@ -1214,6 +1261,9 @@ class ControlPanelV2(QMainWindow):
         self._camera_display_timer.setInterval(CAMERA_DISPLAY_INTERVAL_MS)
         self._camera_display_timer.timeout.connect(self._refresh_camera_display)
         self._camera_display_timer.start()
+        self._camera_health_timer = QTimer(self)
+        self._camera_health_timer.setInterval(1200)
+        self._camera_health_timer.timeout.connect(self._camera_health_check)
         self._camera_msg_type = "image"
         self._camera_status_connected = False
 
@@ -1494,6 +1544,14 @@ class ControlPanelV2(QMainWindow):
         elif self._debug_logs_enabled:
             self._emit_log(f"[INFO] {text}")
 
+    @pyqtSlot(str, bool)
+    def _set_status_async(self, text: str, error: bool = False) -> None:
+        self._set_status(text, error=error)
+
+    @pyqtSlot(object)
+    def _update_camera_topics_async(self, topics: object) -> None:
+        self._update_camera_topics(list(topics) if topics else [])
+
     def _emit_log(self, msg: str, *, flush: bool = True):
         """Print a timestamped log line."""
         print(timestamped_line(msg), flush=flush)
@@ -1566,7 +1624,7 @@ class ControlPanelV2(QMainWindow):
         topics = set(self.ros_worker.list_topic_names()) if self.ros_worker.node_ready() else set()
         if "/joint_trajectory_controller/joint_trajectory" in topics:
             return "/joint_trajectory_controller/joint_trajectory"
-        return "/ur5_arm_joint_trajectory"
+        return ""
 
     def _ensure_pose_subscription(self) -> None:
         if not self._bridge_running or self._closing:
@@ -1653,6 +1711,9 @@ class ControlPanelV2(QMainWindow):
     
     def _cleanup_stray_processes(self):
         """Limpiar procesos fantasma de Gazebo, bridge y rosbag al startup."""
+        if os.environ.get("PANEL_SKIP_CLEANUP", "0") == "1":
+            self._emit_log("[STARTUP] Limpieza omitida (PANEL_SKIP_CLEANUP=1)")
+            return
         # 1. Limpiar archivos de memoria compartida de FastDDS/FastRTPS
         try:
             self._emit_log("[STARTUP] Limpiando /dev/shm (FastDDS)")
@@ -1671,6 +1732,10 @@ class ControlPanelV2(QMainWindow):
             "ros_gz_bridge",
             "parameter_bridge",
             "ros2 bag record",
+            "robot_state_publisher",
+            "ros2_control_node",
+            "controller_manager",
+            "spawner",
         ]
         
         for pattern in processes_to_kill:
@@ -1739,22 +1804,56 @@ class ControlPanelV2(QMainWindow):
             if not self._ros_worker_started:
                 self._ensure_ros_worker_started()
             if not self.ros_worker.node_ready():
-                self._set_status("Nodo ROS no listo para tópicos", error=True)
+                QMetaObject.invokeMethod(
+                    self,
+                    "_set_status_async",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, "Nodo ROS no listo para tópicos"),
+                    Q_ARG(bool, True),
+                )
                 return
             topics = self.ros_worker.topic_names_and_types()
             candidates = [name for name, _types in topics if _is_camera_topic(name)]
             if candidates:
                 self._log(f"[CAMERA] Candidate topics: {', '.join(candidates)}")
-                self._update_camera_topics(candidates)
-                self._set_status(f"Detectados {len(candidates)} tópicos de cámara")
+                QMetaObject.invokeMethod(
+                    self,
+                    "_update_camera_topics_async",
+                    Qt.QueuedConnection,
+                    Q_ARG(object, candidates),
+                )
+                QMetaObject.invokeMethod(
+                    self,
+                    "_set_status_async",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, f"Detectados {len(candidates)} tópicos de cámara"),
+                    Q_ARG(bool, False),
+                )
             else:
                 if self._camera_stream_ok or self._camera_frame_count > 0 or self._camera_subscribed:
                     self._log("[CAMERA] Tópicos aún no visibles en discovery (reintentando)")
-                    self._set_status("Discovery cámara pendiente (reintentando)", error=False)
-                    QTimer.singleShot(0, lambda: self._schedule_camera_health_check(2000))
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_set_status_async",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, "Discovery cámara pendiente (reintentando)"),
+                        Q_ARG(bool, False),
+                    )
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_schedule_camera_health_check",
+                        Qt.QueuedConnection,
+                        Q_ARG(int, 2000),
+                    )
                 else:
                     self._log("[CAMERA] No se encontraron tópicos compatibles")
-                    self._set_status("No se detectaron tópicos de cámara", error=False)
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_set_status_async",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, "No se detectaron tópicos de cámara"),
+                        Q_ARG(bool, False),
+                    )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1763,10 +1862,7 @@ class ControlPanelV2(QMainWindow):
             return False, "nodo ROS no listo"
         if self._ros2_control_available():
             return True, "controller_manager disponible"
-        topics = set(self.ros_worker.list_topic_names())
-        if "/ur5_arm_joint_trajectory" in topics:
-            return True, "bridge joint_trajectory activo"
-        return False, "sin controller_manager ni bridge joint_trajectory"
+        return False, "controller_manager no disponible"
 
     def _schedule_camera_health_check(self, delay_ms: int = 1800) -> None:
         if self._camera_health_retry_scheduled or not self._bridge_running:
@@ -1798,15 +1894,40 @@ class ControlPanelV2(QMainWindow):
                 )
                 if not self._camera_stream_ok:
                     if self._camera_frame_count == 0 and last_age < 2.0:
-                        QTimer.singleShot(0, lambda: self._set_status("Cámara esperando frames…", error=False))
+                        QMetaObject.invokeMethod(
+                            self,
+                            "_set_status_async",
+                            Qt.QueuedConnection,
+                            Q_ARG(str, "Cámara esperando frames…"),
+                            Q_ARG(bool, False),
+                        )
                     else:
-                        QTimer.singleShot(0, lambda: self._set_status("Cámara no publica; calibración bloqueada", error=True))
-                    QTimer.singleShot(0, lambda: self._schedule_camera_health_check(2000))
+                        QMetaObject.invokeMethod(
+                            self,
+                            "_set_status_async",
+                            Qt.QueuedConnection,
+                            Q_ARG(str, "Cámara no publica; calibración bloqueada"),
+                            Q_ARG(bool, True),
+                        )
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_schedule_camera_health_check",
+                        Qt.QueuedConnection,
+                        Q_ARG(int, 2000),
+                    )
                 elif self._objects_settled and not self._calibration_ready:
-                    QTimer.singleShot(0, self._ensure_calibration_ready)
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_ensure_calibration_ready",
+                        Qt.QueuedConnection,
+                    )
             finally:
                 self._camera_topic_check_inflight = False
-                QTimer.singleShot(0, self._refresh_controls)
+                QMetaObject.invokeMethod(
+                    self,
+                    "_refresh_controls",
+                    Qt.QueuedConnection,
+                )
 
         threading.Thread(target=worker, daemon=True).start()
     
@@ -1823,6 +1944,9 @@ class ControlPanelV2(QMainWindow):
             self.camera_topic_combo.setCurrentIndex(idx)
     
     def _connect_camera(self):
+        if threading.current_thread() is not threading.main_thread():
+            QMetaObject.invokeMethod(self, "_connect_camera", Qt.QueuedConnection)
+            return
         self._log_button("Conectar cámara")
         if not self._bridge_running:
             self._log_error("Bridge no activo; cámara bloqueada")
@@ -1869,8 +1993,19 @@ class ControlPanelV2(QMainWindow):
         self._camera_subscribed = True
         self._set_status(f"Suscrito a {topic}", error=False)
         self._log(f"[CAMERA] Suscripción OK a {topic}")
-        QTimer.singleShot(1200, self._camera_health_check)
+        QMetaObject.invokeMethod(
+            self,
+            "_start_camera_health_check",
+            Qt.QueuedConnection,
+            Q_ARG(int, 1200),
+        )
         return True
+
+    @pyqtSlot(int)
+    def _start_camera_health_check(self, delay_ms: int = 1200) -> None:
+        self._camera_health_timer.setInterval(delay_ms)
+        if not self._camera_health_timer.isActive():
+            self._camera_health_timer.start()
 
     def _unsubscribe_camera(self) -> None:
         if not self._camera_subscribed or not self.camera_topic:
@@ -1926,7 +2061,7 @@ class ControlPanelV2(QMainWindow):
             QTimer.singleShot(1500, self._auto_connect_camera)
             return
         self._log("[CAMERA] Auto-conectando cámara...")
-        self._connect_camera()
+        QMetaObject.invokeMethod(self, "_connect_camera", Qt.QueuedConnection)
         if not self._camera_subscribed:
             QTimer.singleShot(1500, self._auto_connect_camera)
 
@@ -2320,6 +2455,7 @@ class ControlPanelV2(QMainWindow):
             self._set_status("Mundo no existe", error=True)
             return
         self._set_status("Lanzando Gazebo…")
+        self._start_robot_state_publisher()
         self.gz_partition = f"ur5pro_{int(time.time())}"
         os.environ["GZ_PARTITION"] = self.gz_partition
         try:
@@ -2364,6 +2500,7 @@ class ControlPanelV2(QMainWindow):
                 self._ensure_pose_subscription()
                 self._set_status("Gazebo lanzado")
                 set_led(self.led_gz, "on")
+                QMetaObject.invokeMethod(self, "_request_auto_bridge_start", Qt.QueuedConnection)
             except Exception as exc:
                 self._set_status(f"Error lanzando Gazebo: {exc}", error=True)
                 set_led(self.led_gz, "error")
@@ -2704,7 +2841,7 @@ class ControlPanelV2(QMainWindow):
                 ["bash", "-lc", cmd],
                 preexec_fn=os.setsid,
             )
-            self._emit_log("[TF] robot_state_publisher lanzado (sin ros2_control)")
+            self._emit_log("[TF] robot_state_publisher lanzado")
         except Exception as exc:
             self._log_error(f"Error lanzando robot_state_publisher: {exc}")
 
@@ -2773,6 +2910,7 @@ class ControlPanelV2(QMainWindow):
                 set_led(self.led_bridge, "on")
                 self._bridge_running = True
                 self._refresh_controls()
+                self._spawn_controllers_async()
                 QMetaObject.invokeMethod(
                     self, "_on_bridge_ready", Qt.QueuedConnection
                 )
@@ -2781,6 +2919,65 @@ class ControlPanelV2(QMainWindow):
                 set_led(self.led_bridge, "error")
                 self._bridge_running = False
                 self._refresh_controls()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _spawn_controllers_async(self):
+        def worker():
+            for _ in range(20):
+                if self._ros2_control_available():
+                    break
+                time.sleep(0.25)
+            if not self._ros2_control_available():
+                self._emit_log("[CTRL] controller_manager no disponible; no se pueden spawnear controladores")
+                return
+            clock_ok = False
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                if self._ros_worker_started:
+                    clock_ok, _age = self.ros_worker.clock_alive()
+                if clock_ok:
+                    break
+                time.sleep(0.25)
+            if not clock_ok:
+                self._emit_log("[CTRL] /clock no disponible; abortando spawners")
+                return
+            self._emit_log("[CTRL] Spawneando controladores ros2_control…")
+            cmds = [
+                [
+                    "ros2", "run", "controller_manager", "spawner",
+                    "joint_state_broadcaster",
+                    "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30",
+                    "--switch-timeout", "30",
+                ],
+                [
+                    "ros2", "run", "controller_manager", "spawner",
+                    "joint_trajectory_controller",
+                    "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30",
+                    "--switch-timeout", "30",
+                ],
+                [
+                    "ros2", "run", "controller_manager", "spawner",
+                    "gripper_controller",
+                    "-c", "/controller_manager",
+                    "--controller-manager-timeout", "30",
+                    "--switch-timeout", "30",
+                ],
+            ]
+            env = os.environ.copy()
+            for cmd in cmds:
+                for attempt in range(3):
+                    try:
+                        res = subprocess.run(cmd, timeout=40, env=env)
+                        if res.returncode == 0:
+                            break
+                        self._emit_log(f"[CTRL] WARN spawner rc={res.returncode}: {' '.join(cmd)}")
+                    except Exception as exc:
+                        self._emit_log(f"[CTRL] ERROR spawner: {exc}")
+                    time.sleep(2.0)
+            self._emit_log("[CTRL] Spawners finalizados")
 
         threading.Thread(target=worker, daemon=True).start()
 

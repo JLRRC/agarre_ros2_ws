@@ -26,10 +26,20 @@ WS_DIR="$WS_DIR" "$SCRIPTS_DIR/run_gz_ros_bridge.sh" >/tmp/ros_gz_bridge.log 2>&
 BRIDGE_PID=$!
 sleep 2
 
-echo "[STACK] Lanzando robot_state_publisher (TF)..."
-ros2 launch ur5_bringup ur5_rsp.launch.py >/tmp/ur5_rsp.log 2>&1 &
+echo "[STACK] Lanzando ros2_control (TF + controllers)..."
+ros2 launch ur5_bringup ur5_ros2_control.launch.py use_sim_time:=true >/tmp/ur5_ros2_control.log 2>&1 &
 RSP_PID=$!
 sleep 1
 
-echo "[STACK] Lanzando panel SUPER PRO..."
-PANEL_COLD_BOOT=0 exec "$SCRIPTS_DIR/run_panel.sh"
+echo "[STACK] Lanzando panel V2..."
+INSTALLED_BIN="$WS_DIR/install/ur5_qt_panel/lib/ur5_qt_panel/panel_v2"
+SRC_PY="$WS_DIR/src/ur5_qt_panel/ur5_qt_panel/panel_v2.py"
+if [[ -x "$INSTALLED_BIN" ]]; then
+  PANEL_COLD_BOOT=0 exec "$INSTALLED_BIN"
+fi
+if [[ -f "$SRC_PY" ]]; then
+  export PYTHONPATH="$WS_DIR/src/ur5_qt_panel:${PYTHONPATH:-}"
+  PANEL_COLD_BOOT=0 exec /usr/bin/python3 "$SRC_PY"
+fi
+echo "[ERROR] No encuentro panel_v2 (instalado o src)." >&2
+exit 1

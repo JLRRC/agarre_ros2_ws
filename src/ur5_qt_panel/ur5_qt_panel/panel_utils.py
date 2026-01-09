@@ -1141,11 +1141,6 @@ def write_bridge_runtime_yaml(runtime_path: str, world_name: str, base_yaml_path
         "  ros_type_name: tf2_msgs/msg/TFMessage\n",
         "  gz_type_name: gz.msgs.Pose_V\n",
         "  direction: GZ_TO_ROS\n\n",
-        "- ros_topic_name: /joint_states\n",
-        f"  gz_topic_name: /world/{world_name}/model/{UR5_MODEL_NAME}/joint_state\n",
-        "  ros_type_name: sensor_msgs/msg/JointState\n",
-        "  gz_type_name: gz.msgs.Model\n",
-        "  direction: GZ_TO_ROS\n\n",
     ]
     try:
         with open(base_yaml_path, "r", encoding="utf-8") as f:

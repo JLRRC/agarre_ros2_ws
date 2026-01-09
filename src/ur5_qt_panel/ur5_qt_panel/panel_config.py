@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 os.environ.setdefault("RMW_FASTRTPS_USE_SHM", "0")
 
 WS_DIR = os.path.expanduser(os.environ.get("WS_DIR", "~/TFM/agarre_ros2_ws"))
+os.environ.setdefault("WS_DIR", WS_DIR)
+os.environ.setdefault("GZ_SIM_SYSTEM_PLUGIN_PATH", "/opt/ros/jazzy/lib")
 SCRIPTS_DIR = os.path.join(WS_DIR, "scripts")
 WORLDS_DIR = os.path.join(WS_DIR, "worlds")
 MODELS_DIR = os.path.join(WS_DIR, "models")
@@ -106,6 +108,9 @@ UR5_CONTROLLERS_YAML = os.path.join(WS_DIR, "src", "ur5_description", "config", 
 
 BRIDGE_BASE_YAML = os.path.join(SCRIPTS_DIR, "bridge_cameras.yaml")
 EGL_VENDOR = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+AUTO_START_BRIDGE = bool(int(os.environ.get("PANEL_AUTO_BRIDGE", "1")))
+AUTO_START_BRIDGE_DELAY_MS = int(os.environ.get("PANEL_AUTO_BRIDGE_DELAY_MS", "1200"))
+AUTO_START_BRIDGE_MAX_RETRIES = int(os.environ.get("PANEL_AUTO_BRIDGE_MAX_RETRIES", "30"))
 
 DEFAULT_WORLD_CANDIDATES = [
     os.path.join(WORLDS_DIR, "ur5_mesa_objetos.sdf"),
@@ -116,7 +121,7 @@ DEBUG_FRAME_LOG = bool(int(os.environ.get("PANEL_DEBUG_FRAMES", "0")))
 BASE_FRAME = os.environ.get("PANEL_BASE_FRAME")
 WORLD_FRAME = os.environ.get("PANEL_WORLD_FRAME")
 
-ARM_TRAJ_TOPIC_DEFAULT = os.environ.get("ARM_TRAJ_TOPIC", "/ur5_arm_joint_trajectory")
+ARM_TRAJ_TOPIC_DEFAULT = os.environ.get("ARM_TRAJ_TOPIC", "/joint_trajectory_controller/joint_trajectory")
 UR5_JOINT_NAMES = [
     "shoulder_pan_joint",
     "shoulder_lift_joint",

@@ -8,7 +8,7 @@ if [ -f "$HOME/TFM/agarre_ros2_ws/install/setup.bash" ]; then
   source "$HOME/TFM/agarre_ros2_ws/install/setup.bash"
 fi
 
-ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
+ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/joint_trajectory_controller/joint_trajectory}"
 TSEC="${TSEC:-3}"
 
 # Si Gazebo está activo, prioriza el topic puenteado (ROS->GZ).

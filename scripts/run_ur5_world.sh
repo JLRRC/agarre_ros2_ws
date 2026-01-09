@@ -5,6 +5,7 @@ set -e
 
 # Workspace del entorno ROS 2 + Gazebo del TFM
 WS_DIR="$HOME/TFM/agarre_ros2_ws"
+export WS_DIR
 
 echo "[INFO] Cargando entorno ROS 2 Jazzy..."
 source /opt/ros/jazzy/setup.bash
@@ -20,6 +21,7 @@ fi
 echo "[INFO] Configurando rutas de recursos para Gazebo (GZ_SIM_RESOURCE_PATH)..."
 export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install:${GZ_SIM_RESOURCE_PATH:-}"
 export IGN_GAZEBO_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH"
+export GZ_SIM_SYSTEM_PLUGIN_PATH="/opt/ros/jazzy/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:$GZ_SIM_SYSTEM_PLUGIN_PATH}"
 
 cd "$WS_DIR"
 

@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 WS_DIR="${WS_DIR:-$HOME/TFM/agarre_ros2_ws}"
-ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/ur5_arm_joint_trajectory}"
+ARM_TRAJ_TOPIC="${ARM_TRAJ_TOPIC:-/joint_trajectory_controller/joint_trajectory}"
 TABLE_ENV="${TABLE_ENV:-$WS_DIR/scripts/ur5_table_pose.env}"
 
 # Pose sobre la mesa (ajusta si quieres otra postura)

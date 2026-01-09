@@ -71,22 +71,4 @@
   direction: GZ_TO_ROS
 
 
-# UR5 arm joint trajectory (ROS -> GZ)
-- ros_topic_name: /ur5_arm_joint_trajectory
-  gz_topic_name: /model/ur5_rg2/joint_trajectory
-  ros_type_name: trajectory_msgs/msg/JointTrajectory
-  gz_type_name: gz.msgs.JointTrajectory
-  direction: ROS_TO_GZ
-
-# RG2 gripper joint position commands (ROS -> GZ)
-- ros_topic_name: /rg2_finger_joint1_cmd
-  gz_topic_name: /rg2_finger_joint1_cmd
-  ros_type_name: std_msgs/msg/Float64
-  gz_type_name: gz.msgs.Double
-  direction: ROS_TO_GZ
-
-- ros_topic_name: /rg2_finger_joint2_cmd
-  gz_topic_name: /rg2_finger_joint2_cmd
-  ros_type_name: std_msgs/msg/Float64
-  gz_type_name: gz.msgs.Double
-  direction: ROS_TO_GZ
+# Control por ros2_control: no se bridgean comandos de trayectoria.
