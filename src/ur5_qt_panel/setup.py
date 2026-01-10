@@ -27,7 +27,6 @@ setup(
     entry_points={
         'console_scripts': [
             'panel_v2 = ur5_qt_panel.panel_v2:main',
-            'selection_tf_service = ur5_qt_panel.selection_tf_node:main',
         ],
     },
 )

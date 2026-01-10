@@ -14,7 +14,3 @@ ament_package()
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
-
-install(FILES ur5.srdf
-  DESTINATION share/${PROJECT_NAME}/config
-)

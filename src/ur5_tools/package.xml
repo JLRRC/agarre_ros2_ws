@@ -5,14 +5,12 @@
 <package format="3">
   <name>ur5_tools</name>
   <version>0.0.0</version>
-  <description>Utilities and helper nodes for UR5 simulation (camera capture, fake cameras).</description>
+  <description>Utilities and helper nodes for UR5 simulation (MoveIt bridge, release service).</description>
   <maintainer email="jesus.lozano.rodriguez@gmail.com">laboratorio</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
-  <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
-  <depend>moveit_commander</depend>
+  <depend>moveit_py</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>

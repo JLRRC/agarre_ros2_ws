@@ -18,13 +18,11 @@ setup(
     zip_safe=True,
     maintainer='laboratorio',
     maintainer_email='jesus.lozano.rodriguez@gmail.com',
-    description='Tools for UR5 simulation (camera capture, etc.)',
+    description='Tools for UR5 simulation (MoveIt bridge, utilities).',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'camera_capture = ur5_tools.camera_capture:main',
-            'fake_cameras = ur5_tools.fake_cameras:main',
             'ur5_moveit_bridge = ur5_tools.ur5_moveit_bridge:main',
             'release_objects_service = ur5_tools.release_objects_service:main',
         ],

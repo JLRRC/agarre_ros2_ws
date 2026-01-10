@@ -279,7 +279,6 @@ def _is_camera_topic(topic: str) -> bool:
 
 
 from .cameras_tab import ObjectListPanel
-from .robot_service import RobotService
 from .calibration_service import CalibrationService, CalibrationMode
 from .ur5_kinematics import fk_ur5
 
@@ -360,7 +359,7 @@ class _PanelLogger:
 
 class ControlPanelV2(QMainWindow):
     retry_send_joints = pyqtSignal()
-    status_updated = pyqtSignal(bool, bool, bool, bool, bool)
+    status_updated = pyqtSignal(bool, bool, bool, bool, bool, bool, bool)
 
     def _camera_health_check(self):
         """Chequeo periódico: si no llegan imágenes, log throttled y alerta visual."""
@@ -415,6 +414,8 @@ class ControlPanelV2(QMainWindow):
         self.gz_proc = None
         self.bridge_proc = None
         self.bag_proc = None
+        self.moveit_proc = None
+        self.moveit_bridge_proc = None
         self.release_service_proc = None
         self.rsp_proc = None
         self.gz_partition = ""
@@ -422,6 +423,8 @@ class ControlPanelV2(QMainWindow):
         self._gz_running = False
         self._gz_world_name = None
         self._bridge_running = False
+        self._moveit_running = False
+        self._moveit_bridge_running = False
         self._tf_ready_timer: Optional[QTimer] = None
         self._tf_ready_last_notice = 0.0
         self._tf_ready_state = False
@@ -455,6 +458,13 @@ class ControlPanelV2(QMainWindow):
         self._detach_feature_checked = False
         self._detach_feature_available = False
         self._detach_feature_logged = False
+        self._started_gazebo = False
+        self._started_bridge = False
+        self._started_moveit = False
+        self._started_moveit_bridge = False
+        self._started_release_service = False
+        self._started_rsp = False
+        self._started_bag = False
         self._detach_inflight = False
         self._detach_attempted = False
         self._detach_auto_disabled = False
@@ -552,7 +562,6 @@ class ControlPanelV2(QMainWindow):
         self._cleanup_stray_processes()
         self._emit_log("[STARTUP] Limpieza de cache Python")
         self._clean_cache_dirs()
-        self.robot_service = RobotService(log_fn=self._log, ws_dir=WS_DIR)
         self._emit_log("[STARTUP] Creando CalibrationService")
         self.calib_service = CalibrationService(log_fn=self._log)
         self._emit_log("[STARTUP] Creando RosWorker")
@@ -1107,6 +1116,24 @@ class ControlPanelV2(QMainWindow):
         self.btn_bag_start.clicked.connect(lambda: self._debounced_btn_action(self.btn_bag_start, self._start_bag))
         self.btn_bag_stop.clicked.connect(lambda: self._debounced_btn_action(self.btn_bag_stop, self._stop_bag))
 
+        # --- MoveIt ---
+        self.btn_moveit_start = QPushButton("Lanzar MoveIt")
+        self.btn_moveit_stop = QPushButton("Detener MoveIt")
+        self.btn_moveit_bridge_start = QPushButton("Lanzar MoveIt bridge")
+        self.btn_moveit_bridge_stop = QPushButton("Detener MoveIt bridge")
+        self.btn_moveit_start.clicked.connect(
+            lambda: self._debounced_btn_action(self.btn_moveit_start, self._start_moveit)
+        )
+        self.btn_moveit_stop.clicked.connect(
+            lambda: self._debounced_btn_action(self.btn_moveit_stop, self._stop_moveit)
+        )
+        self.btn_moveit_bridge_start.clicked.connect(
+            lambda: self._debounced_btn_action(self.btn_moveit_bridge_start, self._start_moveit_bridge)
+        )
+        self.btn_moveit_bridge_stop.clicked.connect(
+            lambda: self._debounced_btn_action(self.btn_moveit_bridge_stop, self._stop_moveit_bridge)
+        )
+
         # --- LEDs de estado ---
         self.led_gz = QLabel()
         self.led_bridge = QLabel()
@@ -1114,14 +1141,26 @@ class ControlPanelV2(QMainWindow):
         self.led_bag = QLabel()
         self.led_ros2 = QLabel()
         self.led_ur5 = QLabel()
-        for led in (self.led_gz, self.led_bridge, self.led_clock, self.led_bag, self.led_ros2, self.led_ur5):
+        self.led_moveit = QLabel()
+        self.led_moveit_bridge = QLabel()
+        for led in (
+            self.led_gz,
+            self.led_bridge,
+            self.led_clock,
+            self.led_bag,
+            self.led_ros2,
+            self.led_ur5,
+            self.led_moveit,
+            self.led_moveit_bridge,
+        ):
             set_led(led, "off")
 
         # --- Sistema: labels para CPU/RAM/Load ---
         self.sys_cpu_lbl = QLabel("CPU  --")
         self.sys_ram_lbl = QLabel("RAM  --")
         self.sys_load_lbl = QLabel("Load  --")
-        for lbl in (self.sys_cpu_lbl, self.sys_ram_lbl, self.sys_load_lbl):
+        self.sys_health_lbl = QLabel("Todo OK")
+        for lbl in (self.sys_cpu_lbl, self.sys_ram_lbl, self.sys_load_lbl, self.sys_health_lbl):
             lbl.setTextInteractionFlags(Qt.NoTextInteraction)
 
         self.status_timer = QTimer(self)
@@ -1184,6 +1223,18 @@ class ControlPanelV2(QMainWindow):
         bag_row.addWidget(self.btn_bag_stop)
         controls_col.addLayout(bag_row)
 
+        moveit_row = QHBoxLayout()
+        moveit_row.setSpacing(6)
+        moveit_row.addWidget(QLabel("MoveIt:"))
+        moveit_row.addWidget(self.btn_moveit_start)
+        moveit_row.addWidget(self.btn_moveit_stop)
+        moveit_row.addSpacing(8)
+        moveit_row.addWidget(QLabel("Bridge:"))
+        moveit_row.addWidget(self.btn_moveit_bridge_start)
+        moveit_row.addWidget(self.btn_moveit_bridge_stop)
+        moveit_row.addStretch(1)
+        controls_col.addLayout(moveit_row)
+
         controls_status_row.addLayout(controls_col, 3)
 
         status_group = QGroupBox("")
@@ -1202,6 +1253,10 @@ class ControlPanelV2(QMainWindow):
         status_grid.addWidget(self.led_ros2, 2, 1)
         status_grid.addWidget(QLabel("UR5 (sim)"), 2, 2)
         status_grid.addWidget(self.led_ur5, 2, 3)
+        status_grid.addWidget(QLabel("MoveIt"), 3, 0)
+        status_grid.addWidget(self.led_moveit, 3, 1)
+        status_grid.addWidget(QLabel("MoveIt bridge"), 3, 2)
+        status_grid.addWidget(self.led_moveit_bridge, 3, 3)
         status_group.setLayout(status_grid)
         controls_status_row.addWidget(status_group, 1)
 
@@ -1214,6 +1269,7 @@ class ControlPanelV2(QMainWindow):
         sys_layout.addWidget(self.sys_cpu_lbl)
         sys_layout.addWidget(self.sys_ram_lbl)
         sys_layout.addWidget(self.sys_load_lbl)
+        sys_layout.addWidget(self.sys_health_lbl)
         sys_group.setLayout(sys_layout)
         controls_status_row.addWidget(sys_group, 0)
 
@@ -1515,7 +1571,7 @@ class ControlPanelV2(QMainWindow):
         root.setLayout(main)
         self.setCentralWidget(root)
         self._start_trace_timer()
-        self._apply_status(False, False, False, False, False)
+        self._apply_status(False, False, False, False, False, False, False)
 
     def _debounced_btn_action(self, btn, action, delay_ms=1200):
         if not btn.isEnabled():
@@ -1736,6 +1792,8 @@ class ControlPanelV2(QMainWindow):
             "ros2_control_node",
             "controller_manager",
             "spawner",
+            "move_group",
+            "ur5_moveit_bridge",
         ]
         
         for pattern in processes_to_kill:
@@ -1864,6 +1922,7 @@ class ControlPanelV2(QMainWindow):
             return True, "controller_manager disponible"
         return False, "controller_manager no disponible"
 
+    @pyqtSlot(int)
     def _schedule_camera_health_check(self, delay_ms: int = 1800) -> None:
         if self._camera_health_retry_scheduled or not self._bridge_running:
             return
@@ -1943,6 +2002,7 @@ class ControlPanelV2(QMainWindow):
         if idx >= 0:
             self.camera_topic_combo.setCurrentIndex(idx)
     
+    @pyqtSlot()
     def _connect_camera(self):
         if threading.current_thread() is not threading.main_thread():
             QMetaObject.invokeMethod(self, "_connect_camera", Qt.QueuedConnection)
@@ -2474,13 +2534,14 @@ class ControlPanelV2(QMainWindow):
                 "export GZ_LOG_LEVEL=error; export IGN_LOGGER_LEVEL=error; export QT_LOGGING_RULES='qt.qml.*=false'; "
             )
             mode = self._effective_mode()
+            warn_only_regex = r"\\[(WARN|ERROR)\\]"
             if mode == "gui":
                 cmd_core = with_line_buffer(f"gz sim -r -v 1 {shlex.quote(world)}")
-                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS)
+                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS, unbuffered=True, include_regex=warn_only_regex)
                 cmd = bash_preamble(self.ws_dir) + env + log_to_file(cmd_core, gz_log, filter_cmd)
             else:
                 cmd_core = with_line_buffer(f"gz sim -s -r -v 1 --headless-rendering {shlex.quote(world)}")
-                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS)
+                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS, unbuffered=True, include_regex=warn_only_regex)
                 cmd = (
                     bash_preamble(self.ws_dir)
                     + env
@@ -2492,6 +2553,7 @@ class ControlPanelV2(QMainWindow):
                     ["bash", "-lc", cmd],
                     preexec_fn=os.setsid,
                 )
+                self._started_gazebo = True
                 self._gz_running = True
                 self._gz_world_name = read_world_name(world) or GZ_WORLD
                 self._log("[GZ] Gazebo lanzado")
@@ -2798,6 +2860,7 @@ class ControlPanelV2(QMainWindow):
                 ["bash", "-lc", cmd],
                 preexec_fn=os.setsid,
             )
+            self._started_release_service = True
         except Exception as exc:
             self._log_error(f"Error iniciando release_objects_service: {exc}")
 
@@ -2841,6 +2904,7 @@ class ControlPanelV2(QMainWindow):
                 ["bash", "-lc", cmd],
                 preexec_fn=os.setsid,
             )
+            self._started_rsp = True
             self._emit_log("[TF] robot_state_publisher lanzado")
         except Exception as exc:
             self._log_error(f"Error lanzando robot_state_publisher: {exc}")
@@ -2881,6 +2945,7 @@ class ControlPanelV2(QMainWindow):
         self._set_status("Lanzando bridge…")
         # Deshabilitar botón mientras arranca para que se vea en gris como Gazebo
         self._bridge_running = True
+        self._started_bridge = True
         self._refresh_controls()
 
         def worker():
@@ -3010,6 +3075,88 @@ class ControlPanelV2(QMainWindow):
         self._objects_release_done = False
         self._pose_info_ready = False
 
+    def _start_moveit(self):
+        if self.moveit_proc is not None and self.moveit_proc.poll() is None:
+            return
+        self._log_button("Start MoveIt")
+        self._set_status("Lanzando MoveIt…")
+        try:
+            ensure_dir(LOG_DIR)
+            moveit_log = os.path.join(LOG_DIR, "moveit_bringup.log")
+            rotate_log(moveit_log)
+            env = f"export ROS_LOG_DIR='{LOG_DIR}/ros' ; "
+            cmd_core = with_line_buffer(
+                "ros2 launch ur5_moveit_config ur5_moveit_bringup.launch.py "
+                "start_ros2_control:=false launch_rviz:=false"
+            )
+            cmd = bash_preamble(self.ws_dir) + env + f"{cmd_core} > '{moveit_log}' 2>&1"
+            self.moveit_proc = subprocess.Popen(
+                ["bash", "-lc", cmd],
+                preexec_fn=os.setsid,
+            )
+            self._started_moveit = True
+            self._moveit_running = True
+            set_led(self.led_moveit, "on")
+            self._set_status("MoveIt lanzado")
+            self._refresh_controls()
+        except Exception as exc:
+            self._set_status(f"Error lanzando MoveIt: {exc}", error=True)
+            set_led(self.led_moveit, "error")
+            self._moveit_running = False
+
+    def _stop_moveit(self):
+        self._log_button("Stop MoveIt")
+        self._set_status("Deteniendo MoveIt…")
+        self._kill_proc(self.moveit_proc, "move_group")
+        self.moveit_proc = None
+        subprocess.run(
+            ["bash", "-lc", "pkill -f 'move_group' || true; pkill -f 'ur5_moveit_bringup.launch.py' || true"],
+            check=False,
+        )
+        self._moveit_running = False
+        set_led(self.led_moveit, "off")
+        self._refresh_controls()
+
+    def _start_moveit_bridge(self):
+        if self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None:
+            return
+        self._log_button("Start MoveIt bridge")
+        if not self._moveit_running:
+            self._log_warning("MoveIt no está activo; el bridge puede fallar")
+        try:
+            ensure_dir(LOG_DIR)
+            bridge_log = os.path.join(LOG_DIR, "moveit_bridge.log")
+            rotate_log(bridge_log)
+            env = f"export ROS_LOG_DIR='{LOG_DIR}/ros' ; "
+            cmd_core = with_line_buffer("ros2 run ur5_tools ur5_moveit_bridge")
+            cmd = bash_preamble(self.ws_dir) + env + f"{cmd_core} > '{bridge_log}' 2>&1"
+            self.moveit_bridge_proc = subprocess.Popen(
+                ["bash", "-lc", cmd],
+                preexec_fn=os.setsid,
+            )
+            self._started_moveit_bridge = True
+            self._moveit_bridge_running = True
+            set_led(self.led_moveit_bridge, "on")
+            self._set_status("MoveIt bridge lanzado")
+            self._refresh_controls()
+        except Exception as exc:
+            self._set_status(f"Error lanzando MoveIt bridge: {exc}", error=True)
+            set_led(self.led_moveit_bridge, "error")
+            self._moveit_bridge_running = False
+
+    def _stop_moveit_bridge(self):
+        self._log_button("Stop MoveIt bridge")
+        self._set_status("Deteniendo MoveIt bridge…")
+        self._kill_proc(self.moveit_bridge_proc, "ur5_moveit_bridge")
+        self.moveit_bridge_proc = None
+        subprocess.run(
+            ["bash", "-lc", "pkill -f 'ur5_moveit_bridge' || true"],
+            check=False,
+        )
+        self._moveit_bridge_running = False
+        set_led(self.led_moveit_bridge, "off")
+        self._refresh_controls()
+
     def _kill_proc(self, proc, label: str):
         if proc is None:
             return
@@ -3088,6 +3235,7 @@ class ControlPanelV2(QMainWindow):
                     cmd,
                 ], preexec_fn=os.setsid)
                 self._bag_running = True
+                self._started_bag = True
                 self._set_status(f"Bag grabando → {outdir}")
                 set_led(self.led_bag, "on")
             except Exception as exc:
@@ -3112,7 +3260,9 @@ class ControlPanelV2(QMainWindow):
         clock_ok, _ = self._clock_status()
         bag_ok = self._rosbag_running()
         ctrl_ok = self._ros2_control_available()
-        self._apply_status(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok)
+        moveit_ok = self.moveit_proc is not None and self.moveit_proc.poll() is None
+        moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
+        self._apply_status(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
 
     def _refresh_status_async(self):
         if self._status_check_inflight:
@@ -3126,28 +3276,45 @@ class ControlPanelV2(QMainWindow):
             bag_ok = self._bag_running
             clock_ok = gz_ok  # /clock depende de Gazebo lanzado desde aquí
             ctrl_ok = gz_ok   # ros2_control se asume cuando Gazebo está arriba
+            moveit_ok = self.moveit_proc is not None and self.moveit_proc.poll() is None
+            moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
             # [REMOVED REPETITIVE STATUS LOG] - solo loguea si hay cambios en el estado
-            self.status_updated.emit(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok)
+            self.status_updated.emit(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
             self._status_check_inflight = False
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_status(self, gz_ok: bool, br_ok: bool, clock_ok: bool, bag_ok: bool, ctrl_ok: bool):
+    def _apply_status(
+        self,
+        gz_ok: bool,
+        br_ok: bool,
+        clock_ok: bool,
+        bag_ok: bool,
+        ctrl_ok: bool,
+        moveit_ok: bool,
+        moveit_bridge_ok: bool,
+    ):
         set_led(self.led_gz, "on" if gz_ok else "off")
         set_led(self.led_bridge, "on" if br_ok else "off")
         set_led(self.led_clock, "on" if clock_ok else "off")
         set_led(self.led_bag, "on" if bag_ok else "off")
         set_led(self.led_ros2, "on" if ctrl_ok else "off")
         set_led(self.led_ur5, "on" if gz_ok else "off")
+        set_led(self.led_moveit, "on" if moveit_ok else "off")
+        set_led(self.led_moveit_bridge, "on" if moveit_bridge_ok else "off")
         self._gz_running = gz_ok
         self._bridge_running = br_ok
         self._bag_running = bag_ok
+        self._moveit_running = moveit_ok
+        self._moveit_bridge_running = moveit_bridge_ok
         summary = []
         summary.append(f"GZ:{'on' if gz_ok else 'off'}")
         summary.append(f"BR:{'on' if br_ok else 'off'}")
         summary.append(f"CLK:{'on' if clock_ok else 'off'}")
         summary.append(f"BAG:{'on' if bag_ok else 'off'}")
         summary.append(f"CTRL:{'on' if ctrl_ok else 'off'}")
+        summary.append(f"MVT:{'on' if moveit_ok else 'off'}")
+        summary.append(f"MBR:{'on' if moveit_bridge_ok else 'off'}")
         self.status_lbl.setText(" · ".join(summary))
         self._update_system_stats()
         self._refresh_controls()
@@ -3160,6 +3327,7 @@ class ControlPanelV2(QMainWindow):
         cpu_alert = False
         ram_alert = False
         load_alert = False
+        stale_count = 0
         cores = max(1, os.cpu_count() or 1)
         try:
             if psutil:
@@ -3186,15 +3354,95 @@ class ControlPanelV2(QMainWindow):
             load_alert = load1 >= max(4.0, cores * 1.5)
         except Exception:
             pass
+        try:
+            stale_count, _stale_hint = self._detect_stale_processes()
+        except Exception:
+            stale_count = 0
+        health_alert = stale_count > 0
+        health_txt = "Proc.Zombis activos" if health_alert else "Todo OK"
         self._set_stat_label(self.sys_cpu_lbl, cpu_txt, cpu_alert)
         self._set_stat_label(self.sys_ram_lbl, ram_txt, ram_alert)
         self._set_stat_label(self.sys_load_lbl, load_txt, load_alert)
+        self._set_stat_label(self.sys_health_lbl, health_txt, health_alert)
 
     def _set_stat_label(self, label: QLabel, text: str, alert: bool):
         color = "#dc2626" if alert else "#0f172a"
         label.setStyleSheet(f"font-size:11px; color:{color};")
         label.setText(text)
 
+    def _known_process_pids(self) -> Set[int]:
+        pids = {os.getpid()}
+        for proc in (
+            self.gz_proc,
+            self.bridge_proc,
+            self.bag_proc,
+            self.moveit_proc,
+            self.moveit_bridge_proc,
+            self.release_service_proc,
+            self.rsp_proc,
+        ):
+            if proc is None:
+                continue
+            try:
+                if proc.pid:
+                    pids.add(proc.pid)
+            except Exception:
+                continue
+        return pids
+
+    def _detect_stale_processes(self) -> Tuple[int, str]:
+        """Detecta procesos del proyecto que no pertenecen al panel actual."""
+        if not psutil:
+            return 0, ""
+        ws_dir = os.path.realpath(self.ws_dir)
+        ignore_pids = self._known_process_pids()
+        patterns = (
+            "ur5_qt_panel",
+            "ur5_tools",
+            "ur5_moveit_bridge",
+            "release_objects_service",
+            "ur5_moveit_config",
+            "gz-transport-topic",
+            "ros_gz_bridge",
+            "parameter_bridge",
+            "gz sim",
+            "gzserver",
+            "gzclient",
+            "ign gazebo",
+            "robot_state_publisher",
+            "controller_manager",
+            "spawner",
+            "move_group",
+        )
+        stale = []
+        for proc in psutil.process_iter(["pid", "cmdline", "name", "status"]):
+            try:
+                pid = proc.info["pid"]
+                if pid in ignore_pids:
+                    continue
+                cmdline = proc.info.get("cmdline") or []
+                cmd = " ".join(cmdline) if cmdline else (proc.info.get("name") or "")
+                cmd = cmd.strip()
+                if not cmd:
+                    continue
+                cmd_lower = cmd.lower()
+                if ws_dir in cmd:
+                    stale.append((pid, cmd))
+                    continue
+                if any(pat in cmd_lower for pat in patterns):
+                    stale.append((pid, cmd))
+                    continue
+                if proc.info.get("status") == psutil.STATUS_ZOMBIE and "ros2" in cmd_lower:
+                    stale.append((pid, cmd))
+            except Exception:
+                continue
+        if not stale:
+            return 0, ""
+        sample_cmd = stale[0][1]
+        hint = sample_cmd.split()[0]
+        return len(stale), hint
+
+    @pyqtSlot()
     def _refresh_controls(self):
         if self._closing:
             return
@@ -3214,6 +3462,12 @@ class ControlPanelV2(QMainWindow):
         self.bag_topics.setEnabled(bag_enabled and not self._bag_running)
         self.btn_bag_start.setEnabled(bag_enabled and not self._bag_running)
         self.btn_bag_stop.setEnabled(bag_enabled and self._bag_running)
+        # MoveIt controls
+        self.btn_moveit_start.setEnabled(not self._moveit_running)
+        self.btn_moveit_stop.setEnabled(self._moveit_running)
+        moveit_bridge_enabled = self._moveit_running
+        self.btn_moveit_bridge_start.setEnabled(moveit_bridge_enabled and not self._moveit_bridge_running)
+        self.btn_moveit_bridge_stop.setEnabled(moveit_bridge_enabled and self._moveit_bridge_running)
         
         # Habilitar/deshabilitar controles dependiendo del estado del bridge
         # Cámara: habilitada solo cuando el bridge está activo
@@ -3293,6 +3547,8 @@ class ControlPanelV2(QMainWindow):
         self._gz_running = False
         self._bridge_running = False
         self._bag_running = False
+        self._moveit_running = False
+        self._moveit_bridge_running = False
         self._auto_joint2_move_done = False
         
         # START ALL y STOP ALL siempre habilitados
@@ -3320,6 +3576,12 @@ class ControlPanelV2(QMainWindow):
         self.btn_bag_stop.setEnabled(False)
         self.bag_name.setEnabled(False)
         self.bag_topics.setEnabled(False)
+
+        # MoveIt controls
+        self.btn_moveit_start.setEnabled(True)
+        self.btn_moveit_stop.setEnabled(False)
+        self.btn_moveit_bridge_start.setEnabled(False)
+        self.btn_moveit_bridge_stop.setEnabled(False)
         
         # Cámara (deshabilitada hasta que bridge esté activo)
         self.camera_topic_combo.setEnabled(False)
@@ -4989,6 +5251,40 @@ class ControlPanelV2(QMainWindow):
         self._log("[TRACE] Shutdown: shutting down TF helper")
         shutdown_tf_helper()
         self._log("[TRACE] Shutdown: TF helper stopped")
+        self._kill_proc(self.bag_proc, "ros2 bag record")
+        self._kill_proc(self.bridge_proc, "parameter_bridge")
+        self._kill_proc(self.release_service_proc, "release_objects_service")
+        self._kill_proc(self.rsp_proc, "robot_state_publisher")
+        self._kill_proc(self.gz_proc, "gz sim")
+        self.bag_proc = None
+        self.bridge_proc = None
+        self.release_service_proc = None
+        self.rsp_proc = None
+        self.gz_proc = None
+        self._kill_proc(self.moveit_bridge_proc, "ur5_moveit_bridge")
+        self._kill_proc(self.moveit_proc, "move_group")
+        self.moveit_bridge_proc = None
+        self.moveit_proc = None
+        if self._started_bag:
+            subprocess.run(["bash", "-lc", "pkill -f 'ros2 bag record' || true"], check=False)
+        if self._started_bridge:
+            subprocess.run(["bash", "-lc", "pkill -f 'ros_gz_bridge' || true; pkill -f parameter_bridge || true"], check=False)
+        if self._started_release_service:
+            subprocess.run(["bash", "-lc", "pkill -f 'release_objects_service' || true"], check=False)
+        if self._started_rsp:
+            subprocess.run(["bash", "-lc", "pkill -f 'robot_state_publisher' || true"], check=False)
+        if self._started_gazebo:
+            subprocess.run(
+                ["bash", "-lc", "pkill -f 'gz sim' || true; pkill -f gzserver || true; pkill -f gzclient || true; pkill -f 'ign gazebo' || true"],
+                check=False,
+            )
+        if self._started_moveit:
+            subprocess.run(
+                ["bash", "-lc", "pkill -f 'move_group' || true; pkill -f 'ur5_moveit_bringup.launch.py' || true"],
+                check=False,
+            )
+        if self._started_moveit_bridge:
+            subprocess.run(["bash", "-lc", "pkill -f 'ur5_moveit_bridge' || true"], check=False)
         if self._moveit_node is not None:
             try:
                 self._moveit_node.destroy_node()
@@ -5032,6 +5328,14 @@ def main():
     app = QApplication(sys.argv)
     panel = ControlPanelV2()
     panel.show()
+    def _handle_signal(_signum, _frame):
+        try:
+            QTimer.singleShot(0, panel.close)
+        except Exception:
+            pass
+    for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, _handle_signal)
     sys.exit(app.exec_())
 
 

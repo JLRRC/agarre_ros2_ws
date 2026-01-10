@@ -25,12 +25,8 @@ fi
 
 echo "[INFO] Lanzando nodo de publicación de poses de agarre (grasp_pose_publisher)..."
 
-# Probamos primero un nombre de ejecutable, y si falla, otro
-if ! ros2 run grasp_pose_publisher grasp_pose_publisher_node; then
-  echo "[WARN] Ejecutable 'grasp_pose_publisher_node' no encontrado, probando 'grasp_pose_publisher'..."
-  if ! ros2 run grasp_pose_publisher grasp_pose_publisher; then
-    echo "[WARN] Ejecutable 'grasp_pose_publisher' no encontrado, lanzando desde fuente..."
-    export PYTHONPATH="$WS_DIR/src/grasp_pose_publisher:$PYTHONPATH"
-    python3 -m grasp_pose_publisher.grasp_pose_node
-  fi
+if ! ros2 run grasp_pose_publisher grasp_pose_node; then
+  echo "[WARN] Ejecutable 'grasp_pose_node' no encontrado, lanzando desde fuente..."
+  export PYTHONPATH="$WS_DIR/src/grasp_pose_publisher:$PYTHONPATH"
+  python3 -m grasp_pose_publisher.grasp_pose_node
 fi

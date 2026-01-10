@@ -19,6 +19,7 @@ export WS_DIR
 : "${ROS_DISTRO:=jazzy}"
 : "${PANEL_COLD_BOOT:=1}"          # 1 = mata procesos antes de arrancar
 : "${PANEL_V2_PREFER_INSTALLED:=1}"# 1 = usa install/.../panel_v2 si existe
+: "${PANEL_START_STACK:=0}"        # 1 = autoarranca RSP+Gazebo, 0 = solo panel (default)
 : "${RMW_IMPLEMENTATION:=rmw_fastrtps_cpp}"
 export RMW_IMPLEMENTATION
 
@@ -76,7 +77,11 @@ set -u
 # --- Recursos Gazebo y modo headless ---
 export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="/opt/ros/jazzy/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:$GZ_SIM_SYSTEM_PLUGIN_PATH}"
-export PANEL_AUTO_BRIDGE="${PANEL_AUTO_BRIDGE:-1}"
+if [[ "${PANEL_START_STACK}" == "1" ]]; then
+  export PANEL_AUTO_BRIDGE="${PANEL_AUTO_BRIDGE:-1}"
+else
+  export PANEL_AUTO_BRIDGE="${PANEL_AUTO_BRIDGE:-0}"
+fi
 export PANEL_AUTO_BRIDGE_DELAY_MS="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"
 log "GZ_SIM_RESOURCE_PATH set to: $GZ_SIM_RESOURCE_PATH"
 
@@ -89,24 +94,28 @@ mkdir -p "$WS_DIR/log"
 echo "$GZ_PARTITION" > "$WS_DIR/log/gz_partition.txt"
 log "GZ_PARTITION set to: $GZ_PARTITION"
 
-# Lanzar robot_state_publisher antes de Gazebo para publicar /robot_description
-log "Lanzando robot_state_publisher (UR5 RSP)"
-ros2 launch ur5_bringup ur5_rsp.launch.py use_sim_time:=true >/tmp/ur5_rsp.log 2>&1 &
+if [[ "${PANEL_START_STACK}" == "1" ]]; then
+  # Lanzar robot_state_publisher antes de Gazebo para publicar /robot_description
+  log "Lanzando robot_state_publisher (UR5 RSP)"
+  ros2 launch ur5_bringup ur5_rsp.launch.py use_sim_time:=true >/tmp/ur5_rsp.log 2>&1 &
 
-# Lanzar Gazebo en modo headless por defecto
-if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
-  log "Lanzando Gazebo en modo GUI"
-  GZ_PARTITION="$GZ_PARTITION" gz sim -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
-else
-  log "Lanzando Gazebo en modo headless"
-  EGL_VENDOR_DEFAULT="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
-  EGL_VENDOR_PATH="${EGL_VENDOR:-$EGL_VENDOR_DEFAULT}"
-  EGL_ENV=()
-  if [[ -f "$EGL_VENDOR_PATH" ]]; then
-    EGL_ENV+=("__EGL_VENDOR_LIBRARY_FILENAMES=$EGL_VENDOR_PATH")
+  # Lanzar Gazebo en modo headless por defecto
+  if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
+    log "Lanzando Gazebo en modo GUI"
+    GZ_PARTITION="$GZ_PARTITION" gz sim -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
+  else
+    log "Lanzando Gazebo en modo headless"
+    EGL_VENDOR_DEFAULT="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+    EGL_VENDOR_PATH="${EGL_VENDOR:-$EGL_VENDOR_DEFAULT}"
+    EGL_ENV=()
+    if [[ -f "$EGL_VENDOR_PATH" ]]; then
+      EGL_ENV+=("__EGL_VENDOR_LIBRARY_FILENAMES=$EGL_VENDOR_PATH")
+    fi
+    env -u DISPLAY "${EGL_ENV[@]}" GZ_RENDER_ENGINE=ogre2 GZ_PARTITION="$GZ_PARTITION" \
+      gz sim -s -r --headless-rendering "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
   fi
-  env -u DISPLAY "${EGL_ENV[@]}" GZ_RENDER_ENGINE=ogre2 GZ_PARTITION="$GZ_PARTITION" \
-    gz sim -s -r --headless-rendering "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
+else
+  log "PANEL_START_STACK=0 → no se autoarranca RSP/Gazebo (modo manual desde el panel)"
 fi
 
 # --- decidir cómo lanzar panel_v2 ---

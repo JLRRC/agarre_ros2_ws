@@ -283,16 +283,21 @@ def log_to_file(cmd: str, log_path: str, filter_cmd: Optional[str]) -> str:
     ensure_dir(os.path.dirname(log_path))
     redir = f">> '{log_path}' 2>&1"
     if filter_cmd:
-        return f"{cmd} | {filter_cmd} {redir}"
+        return f"{cmd} 2>&1 | {filter_cmd} {redir}"
     return f"{cmd} {redir}"
 
 
-def build_log_filter_cmd(filters: List[str], unbuffered: bool = False) -> str:
-    if not filters:
+def build_log_filter_cmd(filters: List[str], unbuffered: bool = False, include_regex: Optional[str] = None) -> str:
+    if not filters and not include_regex:
         return ""
-    expr = "|".join(filters)
-    quoted = shlex.quote(expr)
-    cmd = f"grep -Ev {quoted}"
+    parts = []
+    if include_regex:
+        parts.append(f"grep -E {shlex.quote(include_regex)}")
+    if filters:
+        expr = "|".join(filters)
+        quoted = shlex.quote(expr)
+        parts.append(f"grep -Ev {quoted}")
+    cmd = " | ".join(parts)
     if unbuffered and STDBUF_PREFIX:
         return f"{STDBUF_PREFIX}{cmd}"
     return cmd
