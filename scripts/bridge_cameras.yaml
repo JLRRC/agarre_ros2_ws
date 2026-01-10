@@ -1,24 +1,20 @@
 # URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/bridge_cameras.yaml
 # Summary: Base ros_gz_bridge mapping for RGB and depth camera topics.
 # bridge_cameras.yaml  (BASE)
-# OJO: El /clock lo genera el panel en un YAML runtime con el nombre real del world.
-# Aquí dejamos cámaras RGB + depth (GZ_TO_ROS) y pose/info por defecto.
+# OJO: Este YAML es el único que usa el bridge.
+# Incluye /clock y /world/<world>/pose/info para el mundo principal.
 
+- ros_topic_name: /clock
+  gz_topic_name: /world/ur5_mesa_objetos/clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
 
-# Pose info (debe haber una entrada por cada world_name real que se use)
-# Copia/duplica la siguiente sección para cada nombre de mundo:
 - ros_topic_name: /world/ur5_mesa_objetos/pose/info
   gz_topic_name: /world/ur5_mesa_objetos/pose/info
   ros_type_name: tf2_msgs/msg/TFMessage
   gz_type_name: gz.msgs.Pose_V
   direction: GZ_TO_ROS
-
-# Ejemplo adicional (si usas otro nombre de world, descomenta y ajusta):
-# - ros_topic_name: /world/otro_world/pose/info
-#   gz_topic_name: /world/otro_world/pose/info
-#   ros_type_name: tf2_msgs/msg/TFMessage
-#   gz_type_name: gz.msgs.Pose_V
-#   direction: GZ_TO_ROS
 
 - ros_topic_name: /camera_overhead/image
   gz_topic_name: /camera_overhead/image

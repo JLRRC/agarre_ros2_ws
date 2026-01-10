@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/kill_all.sh
 # Summary: Stops ROS/Gazebo related processes for a clean start.
+# NOTE: uso manual de emergencia; no debe ser llamado automaticamente por el panel.
 set -euo pipefail
 
 echo "[KILL] kill_all.sh (SUPER PRO) — stopping everything..."
@@ -76,5 +77,4 @@ if any_running; then
 else
   echo "[KILL] OK. Sistema limpio."
 fi
-
 

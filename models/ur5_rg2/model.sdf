@@ -700,7 +700,7 @@
         <!-- Drop objects start free (no detachable joints by default). -->
         <plugin filename="gz_ros2_control-system"
                 name="gz_ros2_control::GazeboSimROS2ControlPlugin">
-            <parameters>/home/laboratorio/TFM/agarre_ros2_ws/src/ur5_description/config/ur5_controllers.yaml</parameters>
+            <parameters>models/ur5_rg2/ur5_controllers.yaml</parameters>
         </plugin>
     </model>
 </sdf>

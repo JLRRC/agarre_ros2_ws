@@ -28,7 +28,8 @@ ros2 launch ur5_bringup ur5_stack.launch.py
 Variables útiles:
 - `PANEL_COLD_BOOT=1` (limpia procesos previos antes de arrancar si usas el wrapper)
 - `PANEL_GZ_GUI=1` (lanza Gazebo con GUI desde el wrapper)
-- `PANEL_AUTO_BRIDGE=1` (permite que el panel lance el bridge)
+- `PANEL_MANAGED=1` (panel guiado por `/system_state`, no lanza procesos críticos)
+- `PANEL_MOVEIT_REQUIRED=1` (bloquea READY si MoveIt no está listo)
 - `PANEL_START_STACK=0` (modo panel-only desde el wrapper)
 
 Argumentos útiles del launch:
@@ -41,10 +42,9 @@ Argumentos útiles del launch:
 - `launch_moveit:=true|false`
 
 ## Debug manual (solo si hace falta)
-```bash
-./scripts/run_ur5_world.sh
-./scripts/run_gz_ros_bridge.sh
-```
+- El panel ya no genera YAML runtime del bridge (usa `scripts/bridge_cameras.yaml`).
+- `/clock` y `/world/<world>/pose/info` los aporta el launch oficial.
+- `/system_state` lo publica `ur5_tools/system_state_manager`.
 
 ## MoveIt (bringup independiente)
 ```bash

@@ -83,6 +83,7 @@ from .panel_config import (
     UR5_BASE_X,
     UR5_BASE_Y,
     UR5_BASE_Z,
+    UR5_CONTROLLERS_YAML,
     UR5_MODEL_NAME,
     BASKET_DROP,
     WORLD_FRAME,
@@ -111,6 +112,7 @@ from .panel_utils import (
     parse_ros_topics,
     read_world_name,
     nearest_table_object,
+    object_out_of_reach,
     resolve_gz_partition,
     rotate_log,
     set_led,
@@ -128,7 +130,6 @@ from .panel_utils import (
     _log_tf_yaml_head_once,
     world_xyz_to_pixel,
     with_line_buffer,
-    write_bridge_runtime_yaml,
     build_log_filter_cmd,
     yaw_from_quaternion,
     debug_dump_tf,
@@ -141,6 +142,10 @@ from .logging_utils import timestamped_line
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.time import Time
+try:
+    from rclpy.parameter import Parameter
+except Exception:
+    Parameter = None
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from std_srvs.srv import Trigger
 try:
@@ -166,19 +171,29 @@ TRAJ_ACTION_FALLBACK_EPS_RAD = float(os.environ.get("PANEL_TRAJ_ACTION_FALLBACK_
 TRAJ_ACTION_FALLBACK_TIMEOUT_SEC = float(os.environ.get("PANEL_TRAJ_ACTION_FALLBACK_TIMEOUT_SEC", "2.0"))
 CONTROLLER_READY_TIMEOUT_SEC = float(os.environ.get("PANEL_CONTROLLER_READY_TIMEOUT_SEC", "3.0"))
 MOVEIT_READY_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_READY_TIMEOUT_SEC", "20.0"))
+GZ_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_GZ_LAUNCH_TIMEOUT_SEC", "20.0"))
+BRIDGE_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_BRIDGE_LAUNCH_TIMEOUT_SEC", "12.0"))
+MOVEIT_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_LAUNCH_TIMEOUT_SEC", "25.0"))
+CONTROLLER_DROP_GRACE_SEC = float(os.environ.get("PANEL_CTRL_DROP_GRACE_SEC", "3.0"))
 TRACE_PRINT_PERIOD_SEC = float(os.environ.get("PANEL_TRACE_PRINT_PERIOD_SEC", "3.0"))
 DEBUG_POSES_PERIOD_SEC = float(os.environ.get("PANEL_DEBUG_POSES_PERIOD_SEC", "3.0"))
 PICK_LOG_MIN_INTERVAL_SEC = float(os.environ.get("PANEL_PICK_LOG_MIN_INTERVAL_SEC", "2.0"))
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.environ.get(name, default)
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+PANEL_MANAGED = _env_flag("PANEL_MANAGED", "0")
+PANEL_MOVEIT_REQUIRED = _env_flag("PANEL_MOVEIT_REQUIRED", "1")
 
 
 class SystemState(Enum):
-    BOOTING = "BOOTING"
+    BOOT = "BOOT"
     WAITING_GAZEBO = "WAITING_GAZEBO"
     WAITING_CONTROLLERS = "WAITING_CONTROLLERS"
-    WAITING_TF = "WAITING_TF"
-    WAITING_CAMERA = "WAITING_CAMERA"
-    WAITING_SETTLE = "WAITING_SETTLE"
-    READY = "READY"
+    READY_BASIC = "READY_BASIC"
+    READY_VISION = "READY_VISION"
+    READY_MOVEIT = "READY_MOVEIT"
     ERROR = "ERROR"
 
 
@@ -211,8 +226,10 @@ SETTLE_MANUAL = {"cubo_rojo", "cilindro_verde", "caja_azul", "pieza_pick_mesa"}
 ALLOW_UNSETTLED_ON_TIMEOUT = bool(int(os.environ.get("PANEL_ALLOW_UNSETTLED_ON_TIMEOUT", "0")))
 CAMERA_READY_FRAMES = int(os.environ.get("PANEL_CAMERA_READY_FRAMES", "3"))
 CAMERA_INIT_GRACE_SEC = float(os.environ.get("PANEL_CAMERA_INIT_GRACE_SEC", "4.0"))
+CAMERA_READY_MAX_AGE_SEC = float(os.environ.get("PANEL_CAMERA_READY_MAX_AGE_SEC", "2.5"))
 TF_INIT_GRACE_SEC = float(os.environ.get("PANEL_TF_INIT_GRACE_SEC", "3.0"))
 CONTROLLER_CHECK_INTERVAL_SEC = 3.0
+CONTROLLER_START_GRACE_SEC = float(os.environ.get("PANEL_CTRL_START_GRACE_SEC", "12.0"))
 POSE_INFO_MAX_AGE_SEC = float(os.environ.get("PANEL_POSE_INFO_MAX_AGE_SEC", "1.0"))
 POSE_INFO_POLL_SEC = float(os.environ.get("PANEL_POSE_INFO_POLL_SEC", "0.5"))
 POSE_INFO_LOG_PERIOD = float(os.environ.get("PANEL_POSE_INFO_LOG_PERIOD", "2.0"))
@@ -492,10 +509,21 @@ class ControlPanelV2(QMainWindow):
         self.gz_partition = ""
         self._status_check_inflight = False
         self._gz_running = False
+        self._gz_state = "GAZEBO_OFF"
+        self._gz_state_pending = ""
+        self._gz_state_change_ts = 0.0
+        self._last_clock_ok_ts = 0.0
         self._gz_world_name = None
         self._bridge_running = False
         self._moveit_running = False
         self._moveit_bridge_running = False
+        self._gz_launching = False
+        self._gz_launch_start = 0.0
+        self._bridge_launching = False
+        self._bridge_launch_start = 0.0
+        self._moveit_launching = False
+        self._moveit_launch_start = 0.0
+        self._controller_spawn_last_start = 0.0
         self._tf_ready_timer: Optional[QTimer] = None
         self._tf_ready_last_notice = 0.0
         self._tf_ready_state = False
@@ -506,9 +534,11 @@ class ControlPanelV2(QMainWindow):
         self._ee_warn_period = 5.0
         self._trace_debug_logged = False
         self._panel_logger = _PanelLogger(self)
-        self._system_state = SystemState.BOOTING
+        self._system_state = SystemState.BOOT
         self._system_state_reason = "boot"
         self._system_error_reason = ""
+        self._managed_mode = PANEL_MANAGED
+        self._moveit_required = PANEL_MOVEIT_REQUIRED
         self._tf_invalid = False
         self._moveit_state = MoveItState.OFF
         self._moveit_state_reason = "manual"
@@ -549,7 +579,7 @@ class ControlPanelV2(QMainWindow):
         self._settle_worker_active = False
         self._settle_thread: Optional[threading.Thread] = None
         self._objects_release_done = False
-        self._pose_info_ready = False
+        self._pose_info_ok = False
         self._pose_info_msg_count = 0
         self._pose_info_last_age = float("inf")
         self._pose_info_last_log = 0.0
@@ -635,6 +665,7 @@ class ControlPanelV2(QMainWindow):
         self._controller_check_inflight = False
         self._controllers_ok = False
         self._controllers_reason = "controladores no verificados"
+        self._controllers_state = "STARTING"
         self._last_controller_check = 0.0
         self._controller_spawn_inflight = False
         self._controller_spawn_done = False
@@ -689,6 +720,7 @@ class ControlPanelV2(QMainWindow):
         self.ros_worker.log.connect(self._log_ros_message)
         self.ros_worker.system_state.connect(self._on_system_state_update)
         self._ros_worker_started = False
+        self._ensure_ros_worker_started()
         self._calibration_ready = False
         self._last_calib_block_log = 0.0
         self._emit_log("[STARTUP] Inicializando publisher MoveIt")
@@ -713,7 +745,7 @@ class ControlPanelV2(QMainWindow):
         self.joint_timer.timeout.connect(self._auto_subscribe_joints)
         self.joint_timer.start(800)
     
-        # Inicializar estado UI (todos deshabilitados menos START ALL)
+        # Inicializar estado UI (arranque manual por botones del panel)
         # (self._update_ui_state() se llama al final de _build_ui)
         self._emit_log("[STARTUP] UI state inicial aplicado")
     
@@ -722,7 +754,8 @@ class ControlPanelV2(QMainWindow):
 
         # Chequeo de estado asíncrono tras 1s
         QTimer.singleShot(1000, self._refresh_status_async)
-        self._request_auto_bridge_start()
+        if not self._managed_mode:
+            self._request_auto_bridge_start()
     
         # Test inicial de logging
         self._emit_log("[PANEL-V2] Panel iniciado - logging activo")
@@ -742,7 +775,14 @@ class ControlPanelV2(QMainWindow):
             self._log(f"[Panel] Advertencia: rclpy.init falló ({exc}), se intentará de nuevo.")
         try:
             if self._moveit_node is None:
-                self._moveit_node = rclpy.create_node("panel_v2_moveit_publisher")
+                use_sim_time = os.environ.get("USE_SIM_TIME", "1") == "1"
+                overrides = None
+                if Parameter is not None:
+                    overrides = [Parameter("use_sim_time", Parameter.Type.BOOL, bool(use_sim_time))]
+                node_kwargs = {}
+                if overrides:
+                    node_kwargs["parameter_overrides"] = overrides
+                self._moveit_node = rclpy.create_node("panel_v2_moveit_publisher", **node_kwargs)
             if self._moveit_pose_pub is None and self._moveit_node is not None:
                 self._moveit_pose_pub = self._moveit_node.create_publisher(PoseStamped, MOVEIT_POSE_TOPIC, 10)
             if self._moveit_pose_pub:
@@ -753,6 +793,8 @@ class ControlPanelV2(QMainWindow):
 
     @pyqtSlot()
     def _request_auto_bridge_start(self) -> None:
+        if self._managed_mode:
+            return
         if not AUTO_START_BRIDGE or self._closing or self._bridge_running:
             return
         if self._auto_bridge_timer_scheduled:
@@ -763,11 +805,13 @@ class ControlPanelV2(QMainWindow):
         QTimer.singleShot(AUTO_START_BRIDGE_DELAY_MS, self._auto_bridge_tick)
 
     def _auto_bridge_tick(self) -> None:
+        if self._managed_mode:
+            return
         self._auto_bridge_timer_scheduled = False
         if not AUTO_START_BRIDGE or self._closing or self._bridge_running:
             return
-        gz_ok = self._gz_running or gz_sim_status()[0]
-        if not gz_ok:
+        gz_state = self._gazebo_state()
+        if gz_state == "GAZEBO_OFF":
             self._auto_bridge_attempts += 1
             if self._auto_bridge_attempts >= AUTO_START_BRIDGE_MAX_RETRIES:
                 self._log("[AUTO] Autostart bridge: timeout (Gazebo no disponible)")
@@ -909,6 +953,15 @@ class ControlPanelV2(QMainWindow):
         return True, topic
 
     def _publish_moveit_pose(self, label: str, pose_data: Dict[str, object]) -> None:
+        if not self._moveit_required:
+            self._set_status(f"MoveIt deshabilitado; bloqueando {label}", error=True)
+            self._emit_log(f"[MOVEIT] Bloqueado: {label} (MoveIt deshabilitado)")
+            return
+        if self._managed_mode and not self._state_ready_moveit():
+            reason = self._system_state_reason or self._system_state.value
+            self._set_status(f"Sistema no listo; bloqueando {label} ({reason})", error=True)
+            self._emit_log(f"[MOVEIT] Bloqueado: {label} (state={self._system_state.value})")
+            return
         if self._moveit_state != MoveItState.READY:
             reason = self._moveit_state_reason or "MoveIt no listo"
             if reason != self._moveit_block_reason:
@@ -937,7 +990,7 @@ class ControlPanelV2(QMainWindow):
             return
         if self._settle_worker_active:
             return
-        if not self._pose_info_ready:
+        if not self._pose_info_ok:
             now = time.monotonic()
             if (now - getattr(self, '_last_settle_gating_log', 0.0)) > 1.5:
                 self._emit_log("[PHYSICS][SETTLE] gating: pose_info_ready=false, settle NO iniciado")
@@ -977,7 +1030,7 @@ class ControlPanelV2(QMainWindow):
     def _run_fall_test_async(self) -> None:
         if self._fall_test_active or not self._gz_running or self._closing:
             return
-        if not self._pose_info_ready:
+        if not self._pose_info_ok:
             now = time.monotonic()
             if (now - self._fall_test_last_log) >= POSE_INFO_LOG_PERIOD:
                 self._emit_log("[PHYSICS][FALL_TEST] waiting pose/info data...")
@@ -1261,9 +1314,8 @@ class ControlPanelV2(QMainWindow):
         top = QHBoxLayout()
         top.setSpacing(6)
 
-        self.btn_start_all = QPushButton("START ALL")
-        self.btn_stop_all = QPushButton("STOP ALL")
         self.btn_kill_hard = QPushButton("KILL HARD")
+        self.btn_kill_hard.setToolTip("Uso manual de emergencia (kill_all.sh)")
         self.btn_close_terminal = QPushButton("Cerrar Terminal")
         self.btn_debug_joints = QPushButton("Debug joints/poses → terminal")
         self.btn_debug_joints.setCheckable(True)
@@ -1273,8 +1325,6 @@ class ControlPanelV2(QMainWindow):
         self._apply_debug_button_style(self.btn_debug_joints, self._debug_joints_to_stdout)
         self._apply_debug_button_style(self.btn_debug_logs, self._debug_logs_enabled)
 
-        self.btn_start_all.clicked.connect(lambda: self._debounced_btn_action(self.btn_start_all, lambda: self._run_script("start_all.sh", "START ALL")))
-        self.btn_stop_all.clicked.connect(lambda: self._debounced_btn_action(self.btn_stop_all, lambda: self._run_script("stop_all.sh", "STOP ALL")))
         self.btn_kill_hard.clicked.connect(lambda: self._debounced_btn_action(self.btn_kill_hard, lambda: self._run_script("kill_all.sh", "KILL HARD")))
         self.btn_close_terminal.clicked.connect(self._close_terminal)
         self.btn_debug_logs.clicked.connect(lambda: self._toggle_debug("DEBUG_LOGS_TO_STDOUT"))
@@ -1373,8 +1423,6 @@ class ControlPanelV2(QMainWindow):
         self.status_updated.connect(self._apply_status)
 
         for btn in (
-            self.btn_start_all,
-            self.btn_stop_all,
             self.btn_kill_hard,
             self.btn_close_terminal,
             self.btn_debug_joints,
@@ -1382,8 +1430,6 @@ class ControlPanelV2(QMainWindow):
         ):
             btn.setMinimumHeight(32)
 
-        top.addWidget(self.btn_start_all)
-        top.addWidget(self.btn_stop_all)
         top.addWidget(self.btn_kill_hard)
         top.addWidget(self.btn_close_terminal)
         top.addWidget(self.btn_debug_joints)
@@ -1884,7 +1930,7 @@ class ControlPanelV2(QMainWindow):
         if not self._objects_settled:
             self._log_calib_blocked("esperando caída/estabilidad de objetos")
             return
-        if not self._pose_info_ready:
+        if not self._pose_info_ok:
             self._log_calib_blocked("pose/info no disponible")
             return
         if not self._tf_ready_state:
@@ -1912,29 +1958,69 @@ class ControlPanelV2(QMainWindow):
         if self._system_error_reason:
             self._set_system_state(SystemState.ERROR, self._system_error_reason)
             return
-        if not self._gz_running:
-            self._set_system_state(SystemState.WAITING_GAZEBO, "Gazebo no activo")
-            return
-        if not self._controllers_ok:
-            self._set_system_state(SystemState.WAITING_CONTROLLERS, self._controllers_reason)
-            return
-        if not self._tf_ready_state:
-            self._set_system_state(SystemState.WAITING_TF, "TF world->base_link no disponible")
-            return
-        if not self._bridge_running or not self._camera_stream_ok:
-            self._set_system_state(SystemState.WAITING_CAMERA, "Cámara/bridge no listos")
-            return
-        if not self._objects_settled:
-            self._set_system_state(SystemState.WAITING_SETTLE, "Objetos no estabilizados")
-            return
-        if not self._calibration_ready:
-            self._set_system_state(SystemState.WAITING_SETTLE, "Calibración pendiente")
-            return
-        if self._moveit_state != MoveItState.READY:
-            reason = self._moveit_state_reason or "MoveIt no listo"
-            self._set_system_state(SystemState.WAITING_SETTLE, reason)
-            return
-        self._set_system_state(SystemState.READY, "Sistema listo")
+        next_state = SystemState.READY_VISION
+        next_reason = "Sistema listo (visión)"
+
+        gz_state = self._gazebo_state()
+        if gz_state != "GAZEBO_READY":
+            next_state = SystemState.WAITING_GAZEBO
+            next_reason = f"Gazebo {gz_state}"
+        elif not self._tf_ready_state:
+            next_state = SystemState.WAITING_CONTROLLERS
+            next_reason = "TF world->base_link no disponible"
+        elif not self._bridge_running or not self._camera_stream_ok or not self._pose_info_ok:
+            next_state = SystemState.READY_BASIC
+            if not self._bridge_running:
+                next_reason = "Bridge no listo"
+            elif not self._camera_stream_ok:
+                next_reason = "Cámara no lista"
+            else:
+                next_reason = "pose/info no disponible"
+        elif not self._calibration_ready or not self._objects_settled:
+            next_state = SystemState.READY_BASIC
+            if not self._objects_settled:
+                next_reason = "Objetos no estabilizados"
+            else:
+                next_reason = "Calibración pendiente"
+        elif self._moveit_required and self._moveit_state != MoveItState.READY:
+            next_state = SystemState.READY_VISION
+            next_reason = self._moveit_state_reason or "MoveIt no listo"
+        elif self._moveit_required:
+            next_state = SystemState.READY_MOVEIT
+            next_reason = "Sistema listo (MoveIt)"
+
+        prev_state = self._system_state
+        if prev_state in (SystemState.READY_VISION, SystemState.READY_MOVEIT) and next_state != prev_state:
+            if next_state == SystemState.READY_BASIC:
+                self._set_system_state(next_state, next_reason)
+                return
+            if next_state == SystemState.WAITING_CONTROLLERS and not self._controllers_ok and self._controller_drop_grace_active():
+                self._emit_log(f"[WARN] drop a {next_state.value} suprimido: controladores en gracia ({next_reason})")
+                self._set_system_state(next_state, next_reason)
+                return
+            self._system_error_reason = f"drop: {next_reason}"
+            self._set_system_state(SystemState.ERROR, self._system_error_reason)
+        else:
+            self._set_system_state(next_state, next_reason)
+
+    def _state_ready_basic(self) -> bool:
+        return self._system_state in (SystemState.READY_BASIC, SystemState.READY_VISION, SystemState.READY_MOVEIT)
+
+    def _state_ready_vision(self) -> bool:
+        return self._system_state in (SystemState.READY_VISION, SystemState.READY_MOVEIT)
+
+    def _state_ready_moveit(self) -> bool:
+        return self._system_state == SystemState.READY_MOVEIT
+
+    def _pick_ui_allowed(self) -> bool:
+        return (
+            self._state_ready_moveit()
+            and self._moveit_state == MoveItState.READY
+            and self._controllers_ok
+            and self._pose_info_ok
+            and self._camera_stream_ok
+            and self._tf_ready_state
+        )
 
     @pyqtSlot(object)
     def _update_camera_topics_async(self, topics: object) -> None:
@@ -1949,9 +2035,53 @@ class ControlPanelV2(QMainWindow):
         self._script_motion_active = active
         QTimer.singleShot(0, self._refresh_controls)
 
+    def _set_btn_state(self, btn: QPushButton, enabled: bool, tooltip: str = "") -> None:
+        btn.setEnabled(enabled)
+        if enabled:
+            if tooltip:
+                btn.setToolTip(tooltip)
+            return
+        if tooltip:
+            btn.setToolTip(tooltip)
+
+    def _set_launching_style(self, btn: QPushButton, active: bool) -> None:
+        if active:
+            btn.setStyleSheet("background:#f59e0b; color:#0f172a; font-weight:600;")
+        else:
+            btn.setStyleSheet("")
+
+    def _clear_launching_if_timeout(self, label: str, start_ts: float, timeout_sec: float) -> bool:
+        if not start_ts:
+            return False
+        if (time.time() - start_ts) < timeout_sec:
+            return False
+        self._emit_log(f"[WARN] {label} timeout; re-habilitando botón")
+        return True
+
+    def _controller_drop_grace_active(self) -> bool:
+        if self._controller_spawn_inflight:
+            return True
+        if not self._controller_spawn_last_start:
+            return False
+        return (time.time() - self._controller_spawn_last_start) < CONTROLLER_DROP_GRACE_SEC
+
+    def _require_ready_basic(self, action: str) -> bool:
+        if self._state_ready_basic():
+            return True
+        reason = self._system_state_reason or self._system_state.value
+        self._set_status(f"{action} bloqueado: {reason}", error=True)
+        self._emit_log(f"[SAFETY] {action} bloqueado: {reason}")
+        return False
+
     def _log(self, msg: str):
         if self._debug_logs_enabled:
             self._emit_log(msg)
+
+    def _block_if_managed(self, action: str) -> bool:
+        if not self._managed_mode:
+            return False
+        self._emit_log(f"[WARN] {action} bloqueado: PANEL_MANAGED=1")
+        return True
     
     def _log_error(self, msg: str):
         """SIEMPRE loguear errores, incluso si debug no está activo."""
@@ -1986,27 +2116,39 @@ class ControlPanelV2(QMainWindow):
         state = (self._external_state or "").upper()
         reason = self._external_state_reason or ""
         mapping = {
-            "BOOTING": SystemState.BOOTING,
+            "BOOT": SystemState.BOOT,
+            "BOOTING": SystemState.BOOT,
             "WAITING_GAZEBO": SystemState.WAITING_GAZEBO,
             "WAITING_CONTROLLERS": SystemState.WAITING_CONTROLLERS,
-            "WAITING_TF": SystemState.WAITING_TF,
-            "WAITING_CAMERA": SystemState.WAITING_CAMERA,
-            "WAITING_SETTLE": SystemState.WAITING_SETTLE,
-            "READY": SystemState.READY,
+            "WAITING_TF": SystemState.WAITING_CONTROLLERS,
+            "WAITING_BRIDGE": SystemState.READY_BASIC,
+            "WAITING_CAMERA": SystemState.READY_BASIC,
+            "WAITING_SETTLE": SystemState.READY_BASIC,
+            "WAITING_MOVEIT": SystemState.READY_VISION,
+            "READY_BASIC": SystemState.READY_BASIC,
+            "READY_VISION": SystemState.READY_VISION,
+            "READY_MOVEIT": SystemState.READY_MOVEIT,
+            "READY": SystemState.READY_VISION,
             "ERROR": SystemState.ERROR,
         }
         target = mapping.get(state)
         if target is None:
             return
-        if target == SystemState.READY and self._moveit_state != MoveItState.READY:
-            reason = self._moveit_state_reason or "MoveIt no listo"
-            self._set_system_state(SystemState.WAITING_SETTLE, reason)
-            return
+        if target == SystemState.READY_VISION and self._moveit_required:
+            if self._moveit_state != MoveItState.READY:
+                reason = self._moveit_state_reason or "MoveIt no listo"
+                self._set_system_state(SystemState.READY_VISION, reason)
+                return
+            target = SystemState.READY_MOVEIT
         if target == SystemState.ERROR:
             self._system_error_reason = reason or self._system_error_reason
         else:
             self._system_error_reason = ""
         self._set_system_state(target, reason or f"Estado externo: {state}")
+        if target in (SystemState.READY_BASIC, SystemState.READY_VISION, SystemState.READY_MOVEIT):
+            self._ensure_pose_subscription()
+            self._start_pose_info_watch()
+            self._start_tf_ready_timer()
 
     def _log_camera_diagnostics(self, reason: str):
         """Emitir detalles adicionales para debugging cuando hay fallos de cámara."""
@@ -2037,11 +2179,87 @@ class ControlPanelV2(QMainWindow):
             suffix = "..." if len(camera_topics) > 4 else ""
             self._log(f"[CAMERA-DIAG] camera topics sample: {preview}{suffix}")
 
+    def _sync_moveit_from_system_state(self) -> None:
+        if not self._moveit_required:
+            self._moveit_state = MoveItState.OFF
+            self._moveit_state_reason = "manual"
+            return
+        if not self._external_state_active():
+            return
+        if self._system_state == SystemState.READY_MOVEIT:
+            if self._moveit_state != MoveItState.READY:
+                self._moveit_state = MoveItState.READY
+                self._moveit_state_reason = "move_group listo (externo)"
+            return
+        if self._system_state == SystemState.READY_VISION:
+            self._moveit_state = MoveItState.WAITING_MOVEIT_READY
+            self._moveit_state_reason = self._system_state_reason or "move_group no listo"
+
     def _clock_status(self) -> Tuple[bool, str]:
         if not self._ros_worker_started or not self.ros_worker.node_ready():
             return False, "node_off"
         ok, age = self.ros_worker.clock_alive()
-        return ok, f"age={age:.2f}s"
+        if ok:
+            return True, f"age={age:.2f}s"
+        # Fallback: detectar publishers en /clock aunque no haya recibido mensaje reciente.
+        if self.ros_worker.topic_has_publishers("/clock"):
+            return True, "publisher"
+        return False, f"age={age:.2f}s"
+
+    def _pose_info_topic(self) -> str:
+        world_name = self._gz_world_name or self._detect_world_name() or GZ_WORLD
+        return f"/world/{world_name}/pose/info"
+
+    def _pose_info_active(self) -> bool:
+        if not self._ros_worker_started or not self.ros_worker.node_ready():
+            return False
+        return self.ros_worker.topic_has_publishers(self._pose_info_topic())
+
+    def _pose_info_ready(self) -> bool:
+        if not self._ros_worker_started or not self.ros_worker.node_ready():
+            return False
+        if not self._pose_info_active():
+            return False
+        poses, ts = self.ros_worker.pose_snapshot()
+        if not poses:
+            return False
+        if ts:
+            age = time.time() - ts
+            if age > POSE_INFO_MAX_AGE_SEC:
+                return False
+        return True
+
+    def _gazebo_state(self) -> str:
+        """GAZEBO_OFF / GAZEBO_STARTING / GAZEBO_READY (debounced)."""
+        gz_proc_ok, _gz_reason = gz_sim_status()
+        clock_ok, _clock_reason = self._clock_status()
+        now = time.monotonic()
+        if clock_ok:
+            self._last_clock_ok_ts = now
+        clock_grace = (now - self._last_clock_ok_ts) < 2.5
+        if not gz_proc_ok:
+            candidate = "GAZEBO_OFF"
+        elif clock_ok or (self._gz_state == "GAZEBO_READY" and clock_grace):
+            candidate = "GAZEBO_READY"
+        else:
+            candidate = "GAZEBO_STARTING"
+        if candidate != self._gz_state:
+            if candidate != self._gz_state_pending:
+                self._gz_state_pending = candidate
+                self._gz_state_change_ts = now
+            elif (now - self._gz_state_change_ts) >= 1.0:
+                self._gz_state = candidate
+                self._gz_state_pending = ""
+                reason = "process_alive"
+                if self._gz_state == "GAZEBO_READY":
+                    reason = "clock_ok" if clock_ok else "clock_grace"
+                self._emit_log(
+                    f"[STATE] Gazebo={self._gz_state} reason={reason} "
+                    f"process={str(gz_proc_ok).lower()} clock={str(clock_ok).lower()}"
+                )
+        else:
+            self._gz_state_pending = ""
+        return self._gz_state
 
     def _ros2_control_available(self) -> bool:
         if not self._ros_worker_started or not self.ros_worker.node_ready():
@@ -2121,14 +2339,14 @@ class ControlPanelV2(QMainWindow):
                 f"entities={entities} topic={topic or 'n/a'}"
             )
             self._pose_info_last_log = now
-        if ready and not self._pose_info_ready:
-            self._pose_info_ready = True
+        if ready and not self._pose_info_ok:
+            self._pose_info_ok = True
             self._pose_info_diag_logged = False
             if self._gz_running:
                 self.signal_start_objects_settle_watch.emit()
                 QTimer.singleShot(0, self._schedule_physics_runtime_check)
         elif not ready:
-            self._pose_info_ready = False
+            self._pose_info_ok = False
             if (now - self._pose_info_last_log) >= POSE_INFO_LOG_PERIOD:
                 self._emit_log("[PHYSICS][SETTLE] waiting pose/info data...")
                 self._pose_info_last_log = now
@@ -2167,38 +2385,8 @@ class ControlPanelV2(QMainWindow):
         except Exception:
             pass
         
-        # 2. Matar procesos fantasma
-        processes_to_kill = [
-            "gz sim",
-            "gzserver",
-            "ign gazebo",
-            "ros_gz_bridge",
-            "parameter_bridge",
-            "ros2 bag record",
-            "robot_state_publisher",
-            "ros2_control_node",
-            "controller_manager",
-            "spawner",
-            "move_group",
-            "ur5_moveit_bridge",
-        ]
-        
-        for pattern in processes_to_kill:
-            try:
-                self._emit_log(f"[STARTUP] pkill -f {pattern}")
-                subprocess.run(
-                    ["pkill", "-9", "-f", pattern],
-                    capture_output=True,
-                    timeout=2,
-                )
-            except Exception as e:
-                pass  # Ignorar errores silenciosamente
-        
-        # Esperar un poco para que se maten los procesos
-        import time
-        time.sleep(0.5)
-        
-        self._emit_log("[STARTUP] Procesos fantasma limpios")
+        # 2. No matar procesos automaticamente: usar scripts/kill_all.sh manualmente si hace falta.
+        self._emit_log("[STARTUP] Nota: limpieza de procesos deshabilitada (usa kill_all.sh si es necesario)")
     
     def _clean_cache_dirs(self):
         """Limpiar cachés de Python (__pycache__ y .pyc) en el workspace."""
@@ -2381,13 +2569,15 @@ class ControlPanelV2(QMainWindow):
             try:
                 now = time.time()
                 last_age = now - self._last_camera_frame_ts if self._last_camera_frame_ts else float("inf")
-                ready = self._camera_frame_count >= self._camera_ready_frames and last_age < 1.0
+                ready = self._camera_frame_count >= 1 and last_age < CAMERA_READY_MAX_AGE_SEC
                 self._camera_stream_ok = bool(ready)
                 self._camera_topic_hz = 0.0
                 self._emit_log(
                     f"[BRIDGE] camera_topic={topic} frames={self._camera_frame_count} "
                     f"ready={self._camera_stream_ok} last_age={last_age:.2f}s"
                 )
+                if self._camera_stream_ok:
+                    self._emit_log(f"[CAMERA] ready=True age={last_age:.2f}s")
                 if not self._camera_stream_ok:
                     in_init_grace = False
                     if self._camera_initializing and self._camera_init_start:
@@ -2625,7 +2815,7 @@ class ControlPanelV2(QMainWindow):
             self._camera_pending_frame = (topic, qimg, w, h, fps, now)
         self._last_camera_frame_ts = now
         self._camera_frame_count += 1
-        if self._camera_frame_count >= self._camera_ready_frames:
+        if self._camera_frame_count >= 1:
             self._camera_stream_ok = True
         self._reset_camera_retry_backoff()
         if self._camera_initializing:
@@ -2920,6 +3110,19 @@ class ControlPanelV2(QMainWindow):
         self._set_status(f"{env_var} -> {label}")
 
     def _start_gazebo(self):
+        if self._block_if_managed("Start Gazebo"):
+            return
+        if self._gz_launching:
+            return
+        if not self._ros_worker_started:
+            self._ensure_ros_worker_started()
+        gz_state = self._gazebo_state()
+        if gz_state != "GAZEBO_OFF":
+            self._log_error(f"Gazebo ya activo ({gz_state})")
+            self._set_status(f"Gazebo ya activo ({gz_state})", error=True)
+            set_led(self.led_gz, "on" if gz_state == "GAZEBO_READY" else "warn")
+            self.signal_refresh_controls.emit()
+            return
         self._log_button("Start Gazebo")
         world = self.world_combo.currentText().strip()
         self._log(f"[GZ] Mundo: {world}")
@@ -2932,6 +3135,10 @@ class ControlPanelV2(QMainWindow):
             self._set_status("Mundo no existe", error=True)
             return
         self._set_status("Lanzando Gazebo…")
+        self._gz_launching = True
+        self._gz_launch_start = time.time()
+        self._set_launching_style(self.btn_gz_start, True)
+        self.btn_gz_start.setEnabled(False)
         self._start_robot_state_publisher()
         self.gz_partition = f"ur5pro_{int(time.time())}"
         os.environ["GZ_PARTITION"] = self.gz_partition
@@ -2945,44 +3152,91 @@ class ControlPanelV2(QMainWindow):
             ensure_dir(LOG_DIR)
             gz_log = os.path.join(LOG_DIR, "gz_server.log")
             rotate_log(gz_log)
+            runtime_models_root = os.path.join(LOG_DIR, "gz_models")
+            runtime_ur5_model = os.path.join(runtime_models_root, "ur5_rg2")
+            controllers_yaml = UR5_CONTROLLERS_YAML
+            if not os.path.isfile(controllers_yaml):
+                self._ui_set_status("No se encontró ur5_controllers.yaml", error=True)
+                self.signal_set_led.emit(self.led_gz, "error")
+                self._gz_launching = False
+                self._gz_launch_start = 0.0
+                self.signal_refresh_controls.emit()
+                return
+            try:
+                ensure_dir(runtime_ur5_model)
+                shutil.copytree(os.path.join(MODELS_DIR, "ur5_rg2"), runtime_ur5_model, dirs_exist_ok=True)
+                model_sdf = os.path.join(runtime_ur5_model, "model.sdf")
+                if os.path.isfile(model_sdf):
+                    with open(model_sdf, "r", encoding="utf-8") as f:
+                        sdf_text = f.read()
+                    sdf_text = sdf_text.replace("$(env UR5_CONTROLLERS_YAML)", controllers_yaml)
+                    sdf_text = re.sub(
+                        r"<parameters>\\s*--params-file\\s+[^<]+</parameters>",
+                        f"<parameters>{controllers_yaml}</parameters>",
+                        sdf_text,
+                        flags=re.DOTALL,
+                    )
+                    with open(model_sdf, "w", encoding="utf-8") as f:
+                        f.write(sdf_text)
+            except Exception:
+                pass
             env = (
                 build_gz_env(self.gz_partition)
-                + f"export GZ_SIM_RESOURCE_PATH='{MODELS_DIR}:{WORLDS_DIR}:${{GZ_SIM_RESOURCE_PATH:-}}' ; "
+                + f"export GZ_SIM_RESOURCE_PATH='{runtime_models_root}:{MODELS_DIR}:{WORLDS_DIR}:${{GZ_SIM_RESOURCE_PATH:-}}' ; "
                 "export GZ_LOG_LEVEL=error; export IGN_LOGGER_LEVEL=error; export QT_LOGGING_RULES='qt.qml.*=false'; "
             )
             mode = self._effective_mode()
-            warn_only_regex = r"\\[(WARN|ERROR)\\]"
             if mode == "gui":
                 cmd_core = with_line_buffer(f"gz sim -r -v 1 {shlex.quote(world)}")
-                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS, unbuffered=True, include_regex=warn_only_regex)
-                cmd = bash_preamble(self.ws_dir) + env + log_to_file(cmd_core, gz_log, filter_cmd)
+                cmd = bash_preamble(self.ws_dir) + env + log_to_file(cmd_core, gz_log, None)
             else:
                 cmd_core = with_line_buffer(f"gz sim -s -r -v 1 --headless-rendering {shlex.quote(world)}")
-                filter_cmd = build_log_filter_cmd(GZ_LOG_FILTERS, unbuffered=True, include_regex=warn_only_regex)
                 cmd = (
                     bash_preamble(self.ws_dir)
                     + env
                     + f"env -u DISPLAY __EGL_VENDOR_LIBRARY_FILENAMES='{EGL_VENDOR}' GZ_RENDER_ENGINE=ogre2 "
-                    + log_to_file(cmd_core, gz_log, filter_cmd)
+                    + log_to_file(cmd_core, gz_log, None)
                 )
             try:
                 self.gz_proc = subprocess.Popen(
                     ["bash", "-lc", cmd],
                     preexec_fn=os.setsid,
                 )
+                def monitor():
+                    rc = self.gz_proc.wait()
+                    self._emit_log(f"[GZ] gz sim exited rc={rc} (log: {gz_log})")
+                    try:
+                        tail = subprocess.run(
+                            ["bash", "-lc", f"tail -n 80 {shlex.quote(gz_log)}"],
+                            text=True,
+                            capture_output=True,
+                            timeout=2.0,
+                        )
+                        if tail.stdout:
+                            for line in tail.stdout.splitlines():
+                                self._emit_log(f"[GZ][LOG] {line}")
+                    except Exception:
+                        pass
+                threading.Thread(target=monitor, daemon=True).start()
                 self._started_gazebo = True
                 self._gz_running = True
                 self._gz_world_name = read_world_name(world) or GZ_WORLD
                 self._log("[GZ] Gazebo lanzado")
                 self._invalidate_settle("gazebo start", restart=True)
-                self._pose_info_ready = False
+                self._pose_info_ok = False
                 self._ensure_pose_subscription()
                 self._ui_set_status("Gazebo lanzado")
                 self.signal_set_led.emit(self.led_gz, "on")
                 self.signal_request_auto_bridge_start.emit()
+                self._gz_launching = False
+                self._gz_launch_start = 0.0
+                self.signal_refresh_controls.emit()
             except Exception as exc:
                 self._ui_set_status(f"Error lanzando Gazebo: {exc}", error=True)
                 self.signal_set_led.emit(self.led_gz, "error")
+                self._gz_launching = False
+                self._gz_launch_start = 0.0
+                self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
         # Programar ajuste automático de joint2 tras bridge (no en arranque de Gazebo)
@@ -3059,7 +3313,7 @@ class ControlPanelV2(QMainWindow):
         world_name = self._detect_world_name() or (read_world_name(world_path) if world_path else GZ_WORLD)
         self._gz_world_name = world_name
         self._ensure_pose_subscription()
-        if not self._pose_info_ready:
+        if not self._pose_info_ok:
             return
         stepping, dt, sample = self._probe_pose_motion(world_name, self._settle_targets())
         if stepping is None:
@@ -3310,6 +3564,8 @@ class ControlPanelV2(QMainWindow):
         self._started_world_tf = False
 
     def _stop_gazebo(self):
+        if self._block_if_managed("Stop Gazebo"):
+            return
         self._log_button("Stop Gazebo")
         self._set_status("Deteniendo Gazebo…")
         self._stop_debug_poses()
@@ -3331,12 +3587,7 @@ class ControlPanelV2(QMainWindow):
         self._detach_attempted = False
         self._detach_auto_disabled = False
         self._detach_backoff_until = 0.0
-        self._pose_info_ready = False
-        subprocess.run([
-            "bash",
-            "-lc",
-            "pkill -f 'gz sim' || true; pkill -f gzserver || true; pkill -f gzclient || true",
-        ], check=False)
+        self._pose_info_ok = False
         self._gz_running = False
         set_led(self.led_gz, "off")
 
@@ -3360,24 +3611,39 @@ class ControlPanelV2(QMainWindow):
             self._log_error(f"Error lanzando robot_state_publisher: {exc}")
 
     def _start_bridge(self):
+        if self._block_if_managed("Start bridge"):
+            return
+        if self._bridge_launching:
+            return
+        if not self._ros_worker_started:
+            self._ensure_ros_worker_started()
+        world_name = read_world_name(self.world_combo.currentText().strip()) or GZ_WORLD
+        pose_topic = f"/world/{world_name}/pose/info"
+        if self.ros_worker.node_ready() and self.ros_worker.topic_has_publishers(pose_topic):
+            self._log_warning("Bridge ya activo (pose/info con publishers)")
+            self._set_status("Bridge ya activo (pose/info detectado)", error=True)
+            self._bridge_running = True
+            set_led(self.led_bridge, "on")
+            self.signal_refresh_controls.emit()
+            return
         self._log_button("Start bridge")
         self._camera_stream_ok = False
         self._calibration_ready = False
-        self._pose_info_ready = False
+        self._pose_info_ok = False
         self._pose_info_msg_count = 0
         self._pose_info_last_age = float("inf")
         self._pose_info_last_log = 0.0
         self._tf_no_msgs_logged = False
         # Permitir lanzar bridge en cuanto Gazebo esté realmente arriba (aunque el flag interno tarde en activarse)
-        gz_ok = self._gz_running or gz_sim_status()[0]
-        if not gz_ok:
+        gz_state = self._gazebo_state()
+        if gz_state == "GAZEBO_OFF":
             self._log_error("Bridge requiere Gazebo activo")
             self._set_status("Bridge requiere Gazebo activo", error=True)
             set_led(self.led_bridge, "error")
             return
         self._ensure_ros_worker_started()
         # Actualizar flag interno si lo detectamos corriendo
-        if gz_ok and not self._gz_running:
+        if gz_state != "GAZEBO_OFF" and not self._gz_running:
             self._gz_running = True
             set_led(self.led_gz, "on")
             self._refresh_controls()
@@ -3393,6 +3659,10 @@ class ControlPanelV2(QMainWindow):
         self._reset_trace_throttle("bridge start")
         self._bridge_ready = False
         self._set_status("Lanzando bridge…")
+        self._bridge_launching = True
+        self._bridge_launch_start = time.time()
+        self._set_launching_style(self.btn_bridge_start, True)
+        self.btn_bridge_start.setEnabled(False)
         # Deshabilitar botón mientras arranca para que se vea en gris como Gazebo
         self._bridge_running = True
         self._started_bridge = True
@@ -3401,9 +3671,20 @@ class ControlPanelV2(QMainWindow):
 
         def worker():
             ensure_dir(LOG_DIR)
-            runtime_yaml = os.path.join(LOG_DIR, "bridge_runtime.yaml")
+            runtime_yaml = base_yaml
             world_name = read_world_name(self.world_combo.currentText().strip()) or GZ_WORLD
-            write_bridge_runtime_yaml(runtime_yaml, world_name, base_yaml)
+            try:
+                with open(base_yaml, "r", encoding="utf-8") as f:
+                    yaml_text = f.read()
+                yaml_text = yaml_text.replace(
+                    "/world/ur5_mesa_objetos/",
+                    f"/world/{world_name}/",
+                )
+                runtime_yaml = os.path.join(LOG_DIR, "bridge_runtime.yaml")
+                with open(runtime_yaml, "w", encoding="utf-8") as f:
+                    f.write(yaml_text)
+            except Exception:
+                runtime_yaml = base_yaml
             br_log = os.path.join(LOG_DIR, "ros_gz_bridge.log")
             rotate_log(br_log)
             env = (
@@ -3425,6 +3706,8 @@ class ControlPanelV2(QMainWindow):
                     self._emit_log("[INFO] Bridge lanzado")
                 self.signal_set_led.emit(self.led_bridge, "on")
                 self._bridge_running = True
+                self._bridge_launching = False
+                self._bridge_launch_start = 0.0
                 self.signal_refresh_controls.emit()
                 self._start_world_tf_publisher(world_name)
                 self._spawn_controllers_async()
@@ -3433,6 +3716,8 @@ class ControlPanelV2(QMainWindow):
                 self._ui_set_status(f"Error lanzando bridge: {exc}", error=True)
                 self.signal_set_led.emit(self.led_bridge, "error")
                 self._bridge_running = False
+                self._bridge_launching = False
+                self._bridge_launch_start = 0.0
                 self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3443,6 +3728,7 @@ class ControlPanelV2(QMainWindow):
                 return
             if self._controller_spawn_inflight:
                 return
+            self._controller_spawn_last_start = time.time()
             self._controller_spawn_inflight = True
             for _ in range(20):
                 if self._ros2_control_available():
@@ -3534,6 +3820,8 @@ class ControlPanelV2(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _stop_bridge(self):
+        if self._block_if_managed("Stop bridge"):
+            return
         self._log_button("Stop bridge")
         self._camera_stream_ok = False
         self._camera_topic_hz = 0.0
@@ -3552,11 +3840,6 @@ class ControlPanelV2(QMainWindow):
             self._pose_info_timer.stop()
         self.bridge_proc = None
         self.release_service_proc = None
-        subprocess.run([
-            "bash",
-            "-lc",
-            "pkill -f 'ros_gz_bridge' || true; pkill -f parameter_bridge || true",
-        ], check=False)
         self._bridge_running = False
         self._bridge_start_ts = 0.0
         set_led(self.led_bridge, "off")
@@ -3567,12 +3850,16 @@ class ControlPanelV2(QMainWindow):
         self._controller_spawn_inflight = False
         self._controller_spawn_done = False
         self._objects_release_done = False
-        self._pose_info_ready = False
+        self._pose_info_ok = False
 
     def _start_moveit(self):
+        if self._block_if_managed("Start MoveIt"):
+            return
+        if self._moveit_launching:
+            return
         if not self._ros_worker_started:
             self._ensure_ros_worker_started()
-        if self._moveit_ready():
+        if self._move_group_ready():
             self.signal_moveit_state.emit("READY", "move_group ya activo")
             self._set_status("MoveIt ya activo")
             return
@@ -3583,6 +3870,10 @@ class ControlPanelV2(QMainWindow):
         self._log_button("Start MoveIt")
         self._set_status("Lanzando MoveIt…")
         self.signal_moveit_state.emit("STARTING", "launching move_group")
+        self._moveit_launching = True
+        self._moveit_launch_start = time.time()
+        self._set_launching_style(self.btn_moveit_start, True)
+        self.btn_moveit_start.setEnabled(False)
         try:
             ensure_dir(LOG_DIR)
             moveit_log = os.path.join(LOG_DIR, "moveit_bringup.log")
@@ -3607,16 +3898,16 @@ class ControlPanelV2(QMainWindow):
             self._set_status(f"Error lanzando MoveIt: {exc}", error=True)
             self.signal_moveit_state.emit("ERROR", f"launch failed: {exc}")
             self._moveit_running = False
+            self._moveit_launching = False
+            self._moveit_launch_start = 0.0
 
     def _stop_moveit(self):
+        if self._block_if_managed("Stop MoveIt"):
+            return
         self._log_button("Stop MoveIt")
         self._set_status("Deteniendo MoveIt…")
         self._kill_proc(self.moveit_proc, "move_group")
         self.moveit_proc = None
-        subprocess.run(
-            ["bash", "-lc", "pkill -f 'move_group' || true; pkill -f 'ur5_moveit_bringup.launch.py' || true"],
-            check=False,
-        )
         self._moveit_running = False
         self.signal_moveit_state.emit("OFF", "manual")
         self._refresh_controls()
@@ -3632,23 +3923,46 @@ class ControlPanelV2(QMainWindow):
                     self.signal_moveit_state.emit("ERROR", "move_group terminó")
                 except RuntimeError:
                     return
+                self._moveit_launching = False
+                self._moveit_launch_start = 0.0
+                self.signal_refresh_controls.emit()
                 return
             if not self._ros_worker_started:
                 self._ensure_ros_worker_started()
-            if self._moveit_ready():
+            if self._move_group_ready():
                 try:
                     self.signal_moveit_state.emit("READY", "move_group activo")
                 except RuntimeError:
                     return
+                self._moveit_launching = False
+                self._moveit_launch_start = 0.0
+                self.signal_refresh_controls.emit()
                 return
             time.sleep(0.5)
         try:
+            action_ready = self._moveit_action_ready()
+            status_ready = self._moveit_status_ready()
+            traj_ready = self._follow_joint_traj_ready()
+            self._emit_log(
+                f"[MOVEIT] READY checks: action={action_ready} status={status_ready} traj={traj_ready}"
+            )
             self.signal_moveit_state.emit("WAITING_MOVEIT_READY", "timeout esperando move_group")
         except RuntimeError:
             return
+        self.signal_refresh_controls.emit()
 
     def _start_moveit_bridge(self):
+        if self._block_if_managed("Start MoveIt bridge"):
+            return
         if self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None:
+            return
+        if not self._ros_worker_started:
+            self._ensure_ros_worker_started()
+        if self._moveit_bridge_detected():
+            self._set_status("MoveIt bridge ya activo", error=True)
+            self._moveit_bridge_running = True
+            set_led(self.led_moveit_bridge, "on")
+            self._refresh_controls()
             return
         self._log_button("Start MoveIt bridge")
         if self._moveit_state != MoveItState.READY:
@@ -3675,14 +3989,12 @@ class ControlPanelV2(QMainWindow):
             self._moveit_bridge_running = False
 
     def _stop_moveit_bridge(self):
+        if self._block_if_managed("Stop MoveIt bridge"):
+            return
         self._log_button("Stop MoveIt bridge")
         self._set_status("Deteniendo MoveIt bridge…")
         self._kill_proc(self.moveit_bridge_proc, "ur5_moveit_bridge")
         self.moveit_bridge_proc = None
-        subprocess.run(
-            ["bash", "-lc", "pkill -f 'ur5_moveit_bridge' || true"],
-            check=False,
-        )
         self._moveit_bridge_running = False
         set_led(self.led_moveit_bridge, "off")
         self._refresh_controls()
@@ -3698,6 +4010,16 @@ class ControlPanelV2(QMainWindow):
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except Exception:
             pass
+        try:
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+
+    def _proc_alive(self, proc) -> bool:
+        return proc is not None and proc.poll() is None
 
 
     def _save_home_from_sliders(self):
@@ -3712,14 +4034,13 @@ class ControlPanelV2(QMainWindow):
         self._set_status("Pose HOME guardada", error=False)
 
     def _rosbag_running(self) -> bool:
-        res = subprocess.run(
-            ["bash", "-lc", "pgrep -af 'ros2 bag record' >/dev/null 2>&1"],
-            check=False,
-        )
-        return res.returncode == 0
+        return self._proc_alive(self.bag_proc)
 
     def _start_bag(self):
         self._log_button("Start bag")
+        if self._proc_alive(self.bag_proc):
+            self._set_status("Bag ya activo", error=True)
+            return
         if not self._bridge_running:
             self._log_error("Rosbag requiere bridge activo")
             self._set_status("Bag requiere bridge activo", error=True)
@@ -3781,19 +4102,19 @@ class ControlPanelV2(QMainWindow):
         self._set_status("Deteniendo bag…")
         self._kill_proc(self.bag_proc, "ros2 bag record")
         self.bag_proc = None
-        subprocess.run(["bash", "-lc", "pkill -f 'ros2 bag record' || true"], check=False)
         self._bag_running = False
         set_led(self.led_bag, "off")
 
     def _refresh_status_sync(self):
         """Chequeo síncrono de estado al startup."""
-        gz_ok = self._gz_running
-        br_ok = self._bridge_running
         clock_ok, _ = self._clock_status()
+        gz_state = self._gazebo_state()
+        gz_ok = gz_state == "GAZEBO_READY"
+        br_ok = self._bridge_running or self._pose_info_active()
         bag_ok = self._rosbag_running()
         ctrl_ok = self._ros2_control_available()
         moveit_ok = self._moveit_ready()
-        moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
+        moveit_bridge_ok = self._moveit_bridge_detected()
         self._apply_status(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
 
     def _refresh_status_async(self):
@@ -3802,14 +4123,31 @@ class ControlPanelV2(QMainWindow):
         self._status_check_inflight = True
 
         def worker():
-            # Usar flags internos para no marcar verde si no se han lanzado desde el panel
-            gz_ok = self._gz_running
-            br_ok = self._bridge_running
-            bag_ok = self._bag_running
-            clock_ok = gz_ok  # /clock depende de Gazebo lanzado desde aquí
-            ctrl_ok = self._controllers_ok if self._bridge_running else False
+            if self._managed_mode and self._external_state_active():
+                state = self._system_state
+                external_state = (self._external_state or "").upper()
+                gz_ok = external_state not in ("BOOT", "BOOTING", "WAITING_GAZEBO")
+                br_ok = external_state not in ("BOOT", "BOOTING", "WAITING_GAZEBO", "WAITING_BRIDGE")
+                clock_ok = gz_ok
+                ctrl_ok = state not in (
+                    SystemState.BOOT,
+                    SystemState.WAITING_GAZEBO,
+                    SystemState.WAITING_CONTROLLERS,
+                )
+                moveit_ok = self._moveit_ready()
+                moveit_bridge_ok = self._moveit_bridge_detected()
+                bag_ok = self._bag_running
+                self.status_updated.emit(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
+                self._status_check_inflight = False
+                return
+            clock_ok, _ = self._clock_status()
+            gz_state = self._gazebo_state()
+            gz_ok = gz_state == "GAZEBO_READY"
+            br_ok = self._bridge_running or self._pose_info_active()
+            bag_ok = self._rosbag_running()
+            ctrl_ok = self._ros2_control_available() if br_ok else False
             moveit_ok = self._moveit_ready()
-            moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
+            moveit_bridge_ok = self._moveit_bridge_detected()
             # [REMOVED REPETITIVE STATUS LOG] - solo loguea si hay cambios en el estado
             self.status_updated.emit(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
             self._status_check_inflight = False
@@ -3826,7 +4164,13 @@ class ControlPanelV2(QMainWindow):
         moveit_ok: bool,
         moveit_bridge_ok: bool,
     ):
-        set_led(self.led_gz, "on" if gz_ok else "off")
+        gz_state = self._gz_state or "GAZEBO_OFF"
+        if gz_state == "GAZEBO_READY":
+            set_led(self.led_gz, "on")
+        elif gz_state == "GAZEBO_STARTING":
+            set_led(self.led_gz, "warn")
+        else:
+            set_led(self.led_gz, "off")
         set_led(self.led_bridge, "on" if br_ok else "off")
         set_led(self.led_clock, "on" if clock_ok else "off")
         set_led(self.led_bag, "on" if bag_ok else "off")
@@ -3850,7 +4194,10 @@ class ControlPanelV2(QMainWindow):
         self._moveit_bridge_running = moveit_bridge_ok
         if self._moveit_state == MoveItState.OFF and moveit_ok:
             self._moveit_state = MoveItState.READY
-            self._moveit_state_reason = "move_group detectado"
+            if self._moveit_bridge_detected():
+                self._moveit_state_reason = "moveit_bridge detectado"
+            else:
+                self._moveit_state_reason = "move_group detectado"
             set_led(self.led_moveit, "on")
         if self._moveit_state == MoveItState.READY and not moveit_ok:
             self._moveit_state = MoveItState.WAITING_MOVEIT_READY
@@ -3862,7 +4209,10 @@ class ControlPanelV2(QMainWindow):
             set_led(self.led_moveit, "on")
         self._update_moveit_status_label()
         summary = []
-        summary.append(f"GZ:{'on' if gz_ok else 'off'}")
+        if gz_state == "GAZEBO_STARTING":
+            summary.append("GZ:starting")
+        else:
+            summary.append(f"GZ:{'on' if gz_ok else 'off'}")
         summary.append(f"BR:{'on' if br_ok else 'off'}")
         summary.append(f"CLK:{'on' if clock_ok else 'off'}")
         summary.append(f"BAG:{'on' if bag_ok else 'off'}")
@@ -3877,7 +4227,8 @@ class ControlPanelV2(QMainWindow):
         if not self.ros_worker or not self.ros_worker.node_ready():
             return False
         return (
-            self.ros_worker.topic_has_publishers("/move_group/status")
+            self.ros_worker.topic_has_publishers("/move_action/status")
+            or self.ros_worker.topic_has_publishers("/move_group/status")
             or self.ros_worker.topic_has_publishers("/planning_scene")
         )
 
@@ -3886,7 +4237,10 @@ class ControlPanelV2(QMainWindow):
             return False
         if self._moveit_topics_ready():
             return True
-        return self.ros_worker.has_service("/move_group/get_planning_scene")
+        return (
+            self.ros_worker.has_service("/get_planning_scene")
+            or self.ros_worker.has_service("/move_group/get_planning_scene")
+        )
 
     def _moveit_action_ready(self) -> bool:
         if ActionClient is None or MoveGroup is None:
@@ -3898,15 +4252,20 @@ class ControlPanelV2(QMainWindow):
                 return False
         if self._moveit_node is None:
             return False
-        if self._moveit_action_client is None:
+        action_names = ["/move_action", "/move_group"]
+        for name in action_names:
+            if self._moveit_action_client is None or getattr(self._moveit_action_client, "action_name", "") != name:
+                try:
+                    self._moveit_action_client = ActionClient(self._moveit_node, MoveGroup, name)
+                except Exception:
+                    self._moveit_action_client = None
+                    continue
             try:
-                self._moveit_action_client = ActionClient(self._moveit_node, MoveGroup, "/move_group")
+                if self._moveit_action_client.wait_for_server(timeout_sec=0.2):
+                    return True
             except Exception:
-                return False
-        try:
-            return self._moveit_action_client.wait_for_server(timeout_sec=0.2)
-        except Exception:
-            return False
+                continue
+        return False
 
     def _follow_joint_traj_ready(self) -> bool:
         if not ROS_AVAILABLE or ActionClient is None or FollowJointTrajectory is None:
@@ -3933,8 +4292,23 @@ class ControlPanelV2(QMainWindow):
         except Exception:
             return False
 
-    def _moveit_ready(self) -> bool:
+    def _moveit_bridge_detected(self) -> bool:
+        if self._proc_alive(self.moveit_bridge_proc):
+            return True
+        if not self._ros_worker_started or not self.ros_worker.node_ready():
+            return False
+        return (
+            self.ros_worker.topic_has_subscribers(MOVEIT_POSE_TOPIC)
+            or self.ros_worker.topic_has_subscribers("/grasp_pose")
+        )
+
+    def _move_group_ready(self) -> bool:
         return self._moveit_action_ready() and self._moveit_status_ready() and self._follow_joint_traj_ready()
+
+    def _moveit_ready(self) -> bool:
+        if self._moveit_bridge_detected():
+            return True
+        return self._move_group_ready()
 
     def _update_moveit_status_label(self) -> None:
         if self.lbl_moveit_status is not None:
@@ -4073,39 +4447,97 @@ class ControlPanelV2(QMainWindow):
     def _refresh_controls(self):
         if self._closing:
             return
-        if self._external_state_active():
-            self._apply_external_system_state()
+        if self._gz_launching and self._clear_launching_if_timeout("Gazebo", self._gz_launch_start, GZ_LAUNCH_TIMEOUT_SEC):
+            self._gz_launching = False
+            self._gz_launch_start = 0.0
+            self._set_launching_style(self.btn_gz_start, False)
+        if self._bridge_launching and self._clear_launching_if_timeout("Bridge", self._bridge_launch_start, BRIDGE_LAUNCH_TIMEOUT_SEC):
+            self._bridge_launching = False
+            self._bridge_launch_start = 0.0
+            self._set_launching_style(self.btn_bridge_start, False)
+        if self._moveit_launching and self._clear_launching_if_timeout("MoveIt", self._moveit_launch_start, MOVEIT_LAUNCH_TIMEOUT_SEC):
+            self._moveit_launching = False
+            self._moveit_launch_start = 0.0
+            self._set_launching_style(self.btn_moveit_start, False)
+        if self._managed_mode:
+            if self._external_state_active():
+                self._apply_external_system_state()
+                self._sync_moveit_from_system_state()
+            else:
+                self._set_system_state(SystemState.WAITING_GAZEBO, "Esperando /system_state")
         else:
             self._evaluate_system_state()
-        system_ready = self._system_state == SystemState.READY
+        ready_basic = self._state_ready_basic()
+        ready_vision = self._state_ready_vision()
+        ready_moveit = self._state_ready_moveit()
         system_error = self._system_state == SystemState.ERROR
-        self.btn_gz_start.setEnabled(not self._gz_running)
-        self.btn_gz_stop.setEnabled(self._gz_running)
-        self.btn_debug_joints.setEnabled(self._gz_running)
+        gz_state = self._gazebo_state()
+        gz_active = gz_state != "GAZEBO_OFF"
+        bridge_active = self._bridge_running or self._pose_info_active()
+        gz_proc_alive = self._proc_alive(self.gz_proc)
+        bridge_proc_alive = self._proc_alive(self.bridge_proc)
+        bag_proc_alive = self._proc_alive(self.bag_proc)
+        moveit_proc_alive = self._proc_alive(self.moveit_proc)
+        moveit_bridge_proc_alive = self._proc_alive(self.moveit_bridge_proc)
+        if self._managed_mode:
+            self.btn_gz_start.setEnabled(False)
+            self.btn_gz_stop.setEnabled(False)
+        else:
+            self.btn_gz_start.setEnabled(not gz_active)
+            self.btn_gz_stop.setEnabled(gz_proc_alive)
+        if self._gz_launching:
+            self._set_launching_style(self.btn_gz_start, True)
+            self.btn_gz_start.setEnabled(False)
+        else:
+            self._set_launching_style(self.btn_gz_start, False)
+        self.btn_debug_joints.setEnabled(gz_active)
         # Bridge controls siguen el estado de Gazebo para mantenerlos grises hasta que haya simulación
-        bridge_enabled = self._gz_running
-        self.bridge_presets.setEnabled(bridge_enabled and not self._bridge_running)
-        self.bridge_edit.setEnabled(bridge_enabled and not self._bridge_running)
-        self.btn_bridge_browse.setEnabled(bridge_enabled and not self._bridge_running)
-        self.btn_bridge_start.setEnabled(bridge_enabled and not self._bridge_running)
-        self.btn_bridge_stop.setEnabled(bridge_enabled and self._bridge_running)
+        bridge_enabled = gz_active
+        self.bridge_presets.setEnabled(bridge_enabled and not bridge_active)
+        self.bridge_edit.setEnabled(bridge_enabled and not bridge_active)
+        if self._managed_mode:
+            self.btn_bridge_browse.setEnabled(False)
+            self.btn_bridge_start.setEnabled(False)
+            self.btn_bridge_stop.setEnabled(False)
+        else:
+            self.btn_bridge_browse.setEnabled(bridge_enabled and not bridge_active)
+            self.btn_bridge_start.setEnabled(bridge_enabled and not bridge_active)
+            self.btn_bridge_stop.setEnabled(bridge_proc_alive)
+        if self._bridge_launching:
+            self._set_launching_style(self.btn_bridge_start, True)
+            self.btn_bridge_start.setEnabled(False)
+        else:
+            self._set_launching_style(self.btn_bridge_start, False)
         # Bag depende de que Gazebo y bridge estén arriba
-        bag_enabled = self._gz_running and self._bridge_running
-        self.bag_name.setEnabled(bag_enabled and not self._bag_running)
-        self.bag_topics.setEnabled(bag_enabled and not self._bag_running)
-        self.btn_bag_start.setEnabled(bag_enabled and not self._bag_running)
-        self.btn_bag_stop.setEnabled(bag_enabled and self._bag_running)
+        bag_enabled = gz_active and bridge_active
+        self.bag_name.setEnabled(bag_enabled and not bag_proc_alive)
+        self.bag_topics.setEnabled(bag_enabled and not bag_proc_alive)
+        self.btn_bag_start.setEnabled(bag_enabled and not bag_proc_alive)
+        self.btn_bag_stop.setEnabled(bag_proc_alive)
         # MoveIt controls
         moveit_running = self._moveit_state != MoveItState.OFF
-        self.btn_moveit_start.setEnabled(not moveit_running)
-        self.btn_moveit_stop.setEnabled(moveit_running)
-        moveit_bridge_enabled = self._moveit_state == MoveItState.READY
-        self.btn_moveit_bridge_start.setEnabled(moveit_bridge_enabled and not self._moveit_bridge_running)
-        self.btn_moveit_bridge_stop.setEnabled(moveit_bridge_enabled and self._moveit_bridge_running)
+        if self._managed_mode:
+            self.btn_moveit_start.setEnabled(False)
+            self.btn_moveit_stop.setEnabled(False)
+        else:
+            self.btn_moveit_start.setEnabled(not self._moveit_ready())
+            self.btn_moveit_stop.setEnabled(moveit_proc_alive)
+        if self._moveit_launching:
+            self._set_launching_style(self.btn_moveit_start, True)
+            self.btn_moveit_start.setEnabled(False)
+        else:
+            self._set_launching_style(self.btn_moveit_start, False)
+        moveit_bridge_enabled = ready_basic and self._tf_ready_state
+        if self._managed_mode:
+            self.btn_moveit_bridge_start.setEnabled(False)
+            self.btn_moveit_bridge_stop.setEnabled(False)
+        else:
+            self.btn_moveit_bridge_start.setEnabled(moveit_bridge_enabled and not self._moveit_bridge_detected())
+            self.btn_moveit_bridge_stop.setEnabled(moveit_bridge_proc_alive)
         
         # Habilitar/deshabilitar controles dependiendo del estado del bridge
         # Cámara: habilitada solo cuando el bridge está activo
-        camera_enabled = self._bridge_running
+        camera_enabled = bridge_active
         self.camera_topic_combo.setEnabled(camera_enabled)
         self.btn_camera_refresh.setEnabled(camera_enabled)
         self.btn_camera_connect.setEnabled(camera_enabled)
@@ -4114,33 +4546,56 @@ class ControlPanelV2(QMainWindow):
             and not system_error
             and self._objects_settled
             and self._camera_stream_ok
-            and self._pose_info_ready
+            and self._pose_info_ok
             and self._tf_ready_state
         )
         
         # Control manual: habilitado cuando el bridge está activo
-        manual_enabled = system_ready and self._controllers_ok and not self._script_motion_active
-        self.btn_send_joints.setEnabled(manual_enabled)
+        manual_enabled = ready_basic and self._controllers_ok and self._tf_ready_state and not self._script_motion_active
+        basic_reason = self._system_state_reason or self._system_state.value
+        if not self._tf_ready_state:
+            basic_reason = "TF no listo (world→base_link→tool0)"
+        self._set_btn_state(
+            self.btn_send_joints,
+            manual_enabled,
+            f"Bloqueado: {basic_reason}" if not manual_enabled else "Mover articulaciones",
+        )
         self.joint_time.setEnabled(manual_enabled)
         self.chk_auto_joints.setEnabled(manual_enabled)
         for slider in self.joint_sliders:
             slider.setEnabled(manual_enabled)
 
         # Botones de movimiento: solo con bridge activo
-        motion_enabled = system_ready and self._controllers_ok and not self._script_motion_active
-        self.btn_home.setEnabled(motion_enabled)
-        self.btn_table.setEnabled(motion_enabled)
-        self.btn_basket.setEnabled(motion_enabled)
-        self.btn_gripper.setEnabled(motion_enabled)
+        motion_enabled = ready_basic and self._controllers_ok and self._tf_ready_state and not self._script_motion_active
+        motion_tip = "" if motion_enabled else f"Bloqueado: {basic_reason}"
+        self._set_btn_state(self.btn_home, motion_enabled, motion_tip)
+        self._set_btn_state(self.btn_table, motion_enabled, motion_tip)
+        self._set_btn_state(self.btn_basket, motion_enabled, motion_tip)
+        self._set_btn_state(self.btn_gripper, motion_enabled, motion_tip)
         self._schedule_controller_check()
-        moveit_ready = self._moveit_state == MoveItState.READY
-        pick_enabled = system_ready and motion_enabled and bool(self._ee_frame_effective) and moveit_ready
-        self.btn_pick_demo.setEnabled(pick_enabled)
-        if system_ready and motion_enabled and self._controllers_ok and not pick_enabled:
+        moveit_ready = self._moveit_ready()
+        # RELAXED GATING FOR DEMO PICK
+        pick_enabled = (
+            gz_state == "GAZEBO_READY"
+            and motion_enabled
+            and bool(self._ee_frame_effective)
+            and moveit_ready
+            and self._camera_stream_ok
+        )
+        pick_tip = "Requiere MoveIt listo (backend activo) y visión lista"
+        self._set_btn_state(self.btn_pick_demo, pick_enabled, pick_tip)
+        # RELAXED GATING FOR DEMO PICK
+        pick_ui_enabled = self._camera_stream_ok and self._pose_info_ok
+        if hasattr(self, "obj_panel"):
+            self.obj_panel.setEnabled(pick_ui_enabled)
+        if hasattr(self, "camera_view"):
+            # RELAXED GATING FOR DEMO PICK
+            self.camera_view.setEnabled(self._camera_stream_ok)
+        if ready_basic and motion_enabled and self._controllers_ok and not pick_enabled:
             reason = "TF world->base_link no disponible"
             if not moveit_ready:
                 reason = "MoveIt no listo"
-            if not self._pose_info_ready:
+            if not self._pose_info_ok:
                 reason = "pose/info no disponible"
             if not self._ee_frame_effective:
                 reason = "EE frame no disponible"
@@ -4152,9 +4607,9 @@ class ControlPanelV2(QMainWindow):
             self._pick_block_reason = None
         
         # World selector: deshabilitado cuando Gazebo está corriendo (no se puede cambiar)
-        self.world_combo.setEnabled(not self._gz_running)
-        self.mode_combo.setEnabled(not self._gz_running)
-        self.btn_world_browse.setEnabled(not self._gz_running)
+        self.world_combo.setEnabled(not gz_active)
+        self.mode_combo.setEnabled(not gz_active)
+        self.btn_world_browse.setEnabled(not gz_active)
 
     def _schedule_controller_check(self) -> None:
         if not self._bridge_running:
@@ -4167,8 +4622,29 @@ class ControlPanelV2(QMainWindow):
         def worker():
             ok, reason = self._controllers_ready()
             changed = (ok != self._controllers_ok) or (reason != self._controllers_reason)
-            self._controllers_ok = ok
-            self._controllers_reason = reason
+            now = time.time()
+            grace_base = self._controller_spawn_last_start or self._bridge_start_ts or 0.0
+            in_grace = grace_base and (now - grace_base) < CONTROLLER_START_GRACE_SEC
+            if ok:
+                if self._controllers_state != "READY":
+                    self._emit_log("[CTRL] state=READY")
+                    self._controllers_state = "READY"
+                self._controllers_ok = True
+                self._controllers_reason = reason
+            else:
+                if in_grace:
+                    if self._controllers_state != "STARTING":
+                        self._emit_log("[CTRL] state=STARTING")
+                        self._controllers_state = "STARTING"
+                    # Mantener controllers_ok=false pero sin degradar el estado global.
+                    self._controllers_ok = False
+                    self._controllers_reason = reason
+                else:
+                    if self._controllers_state != "ERROR":
+                        self._emit_log("[CTRL] state=ERROR")
+                        self._controllers_state = "ERROR"
+                    self._controllers_ok = False
+                    self._controllers_reason = reason
             self._last_controller_check = time.time()
             self._controller_check_inflight = False
             if changed:
@@ -4181,17 +4657,13 @@ class ControlPanelV2(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _update_ui_state(self):
-        """Inicializar UI: TODO deshabilitado excepto START ALL."""
+        """Inicializar UI: arranque manual desde los controles del panel."""
         self._gz_running = False
         self._bridge_running = False
         self._bag_running = False
         self._moveit_running = False
         self._moveit_bridge_running = False
         self._auto_joint2_move_done = False
-        
-        # START ALL y STOP ALL siempre habilitados
-        self.btn_start_all.setEnabled(True)
-        self.btn_stop_all.setEnabled(self._gz_running)
         
         # Gazebo controls
         self.btn_gz_start.setEnabled(True)
@@ -4313,6 +4785,8 @@ class ControlPanelV2(QMainWindow):
 
     def _go_home(self):
         self._log_button("Go HOME")
+        if not self._require_ready_basic("HOME"):
+            return
         self._log("[ROBOT] Iniciando movimiento a HOME")
         self._set_status("Moviendo a HOME…")
         self._set_motion_lock(True)
@@ -4328,6 +4802,8 @@ class ControlPanelV2(QMainWindow):
 
     def _go_table(self):
         self._log_button("Go Mesa")
+        if not self._require_ready_basic("Mesa"):
+            return
         self._log("[ROBOT] Iniciando movimiento a Mesa")
         self._set_status("Moviendo a Mesa…")
         self._set_motion_lock(True)
@@ -4343,6 +4819,8 @@ class ControlPanelV2(QMainWindow):
 
     def _go_basket(self):
         self._log_button("Go Cesta")
+        if not self._require_ready_basic("Cesta"):
+            return
         self._set_status("Moviendo a Cesta…")
         self._set_motion_lock(True)
         move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
@@ -4356,6 +4834,8 @@ class ControlPanelV2(QMainWindow):
         self._set_motion_lock(False)
 
     def _toggle_gripper_button(self, checked: bool):
+        if not self._require_ready_basic("Gripper"):
+            return
         self._gripper_closed = checked
         self.btn_gripper.setText("Abrir gripper" if checked else "Cerrar gripper")
         self._log_button(f"Gripper {'cerrar' if checked else 'abrir'}")
@@ -4363,6 +4843,10 @@ class ControlPanelV2(QMainWindow):
     
     def _on_camera_click(self, px: int, py: int):
         """Manejar click en la imagen de cámara."""
+        if hasattr(self, "camera_view") and not self.camera_view.isEnabled():
+            return
+        if not self._pick_ui_allowed():
+            return
         # Prioridad 1: Si está calibrando, manejar calibración
         if self._calibrating:
             self._handle_calibration_click(px, py)
@@ -4542,7 +5026,7 @@ class ControlPanelV2(QMainWindow):
             self._log_calib_blocked("esperando caída/estabilidad de objetos")
             self._set_status("Bloqueado: esperando caída/estabilización de objetos", error=True)
             return
-        if not self._pose_info_ready:
+        if not self._pose_info_ok:
             self._log_calib_blocked("pose/info no disponible")
             self._set_status("Bloqueado: pose/info no disponible", error=True)
             return
@@ -4753,9 +5237,21 @@ class ControlPanelV2(QMainWindow):
     def _run_pick_demo(self):
         """Publica una secuencia MoveIt-only para el DEMO de mesa → cesta."""
         self._log_button("PICK MESA → CESTA")
-        if self._system_state != SystemState.READY:
+        # RELAXED GATING FOR DEMO PICK
+        demo_ready = (
+            self._gazebo_state() == "GAZEBO_READY"
+            and self._controllers_ok
+            and self._tf_ready_state
+            and bool(self._ee_frame_effective)
+            and self._camera_stream_ok
+        )
+        if not demo_ready:
             self._set_status("Sistema no listo; bloqueando pick", error=True)
             self._emit_log(f"[PICK] Bloqueado: estado={self._system_state.value}")
+            return
+        if not self._moveit_required:
+            self._set_status("MoveIt deshabilitado; bloqueando pick", error=True)
+            self._emit_log("[PICK] Bloqueado: MoveIt deshabilitado")
             return
         if self._moveit_state != MoveItState.READY:
             reason = self._moveit_state_reason or "MoveIt no listo"
@@ -4958,6 +5454,8 @@ class ControlPanelV2(QMainWindow):
     
     def _handle_object_selection_click(self, px: int, py: int):
         """Manejar click en cámara para seleccionar objeto (igual a Panel Only)."""
+        if not self._pick_ui_allowed():
+            return
         # Usar homografía global/table map para convertir a mundo
         w = getattr(self.camera_view, "_img_width", 0)
         h = getattr(self.camera_view, "_img_height", 0)
@@ -5002,7 +5500,8 @@ class ControlPanelV2(QMainWindow):
         self._selected_px = (px, py)
         self._selected_world = (wx, wy, wz)
         self._selection_timestamp = time.time()
-        self._log(f"[PICK] Objeto seleccionado: {name} @ px=({px},{py}) world=({wx:.2f},{wy:.2f},{wz:.2f})")
+        px_label = f"px=({px},{py})" if px >= 0 and py >= 0 else "px=n/a"
+        self._log(f"[PICK] Objeto seleccionado: {name} @ {px_label} world=({wx:.2f},{wy:.2f},{wz:.2f})")
         self._set_status(f"✓ Seleccionado: {name} ({wx:.2f},{wy:.2f})", error=False)
         self._update_objects()
         self._log_selection_tf(self._selected_world)
@@ -5122,7 +5621,16 @@ class ControlPanelV2(QMainWindow):
     def _start_pick_tf_resolve(self, world_pose: Tuple[float, float, float], world_frame: str) -> None:
         if self._pick_tf_inflight:
             return
-        if not self._pose_info_ready:
+        if not self._moveit_required:
+            self._emit_log("[PICK] Bloqueado: MoveIt deshabilitado")
+            self._ui_set_status("PICK bloqueado: MoveIt no activo", error=True)
+            return
+        if not self._state_ready_moveit():
+            reason = self._system_state_reason or self._system_state.value
+            self._emit_log(f"[PICK] Bloqueado: estado={self._system_state.value}")
+            self._ui_set_status(f"PICK bloqueado: {reason}", error=True)
+            return
+        if not self._pose_info_ok:
             self._emit_log("[PICK] Bloqueado: pose/info no disponible")
             self._ui_set_status("PICK bloqueado: pose/info no disponible", error=True)
             return
@@ -5205,6 +5713,10 @@ class ControlPanelV2(QMainWindow):
 
     def _on_object_clicked(self, name: str):
         """Manejar click en objeto de la lista (IGUAL A PANEL ONLY)."""
+        if hasattr(self, "obj_panel") and not self.obj_panel.isEnabled():
+            return
+        if not self._pick_ui_allowed():
+            return
         # Obtener posición del objeto
         objects = get_object_positions()
         if name not in objects:
@@ -5215,12 +5727,14 @@ class ControlPanelV2(QMainWindow):
         self._log(f"[PICK] Click en objeto: {name} @ world ({x:.3f}, {y:.3f}, {z:.3f})")
         
         # ✅ Convertir a píxel usando table_xy_to_pixel (IGUAL A PANEL ONLY)
-        px, py = 0, 0
+        px, py = -1, -1
         # Usar las dimensiones de la última imagen recibida del CameraView
         w = getattr(self.camera_view, "_img_width", 0) if hasattr(self, "camera_view") else 0
         h = getattr(self.camera_view, "_img_height", 0) if hasattr(self, "camera_view") else 0
         
-        if w > 0 and h > 0:
+        if not (self._camera_stream_ok and self._pose_info_ok and w > 0 and h > 0):
+            self._log("[PICK] Sin cámara/pose_info lista; omitiendo conversión a píxel")
+        else:
             # Intentar convertir con coordenadas XYZ primero
             pix = world_xyz_to_pixel(x, y, z, w, h)
             if not pix:
@@ -5240,12 +5754,19 @@ class ControlPanelV2(QMainWindow):
             return
 
         objects = get_object_positions() if self._gz_running else {}
-        self.obj_panel.update_objects(objects)
+        pickable_map = {}
+        pickable_allowed = self._state_ready_moveit()
+        if objects:
+            for name, (x, y, _z) in objects.items():
+                pickable_map[name] = pickable_allowed and not object_out_of_reach(x, y)
+        self.obj_panel.update_objects(objects, pickable=pickable_map)
 
         sel_text = "Selección: -"
         if self._selected_object and self._selected_world:
             wx, wy, _wz = self._selected_world
             sel_text = f"Selección: {self._selected_object} @ ({wx:.2f},{wy:.2f})"
+            if not pickable_allowed:
+                sel_text = f"{sel_text} · MoveIt no activo"
         self.obj_panel.set_selected(self._selected_object, sel_text)
 
     def _build_trace_group(self) -> QGroupBox:
@@ -5355,6 +5876,14 @@ class ControlPanelV2(QMainWindow):
         if detected_ee and detected_ee != self._ee_frame_effective:
             self._ee_frame_effective = detected_ee
         effective_ee = detected_ee or self._ee_frame_effective
+        if not effective_ee:
+            helper = get_tf_helper()
+            for candidate in ("tool0", "flange"):
+                if helper and _can_transform_between(helper, effective_base, candidate, timeout_sec=0.05):
+                    effective_ee = candidate
+                    self._ee_frame_effective = candidate
+                    self._emit_log(f"[TF] EE resolved via {candidate}")
+                    break
         return effective_base, effective_ee
 
     def _refresh_trace_data(self):
@@ -5868,6 +6397,8 @@ class ControlPanelV2(QMainWindow):
 
     def _send_joints(self):
         self._log_button("Send joints")
+        if not self._require_ready_basic("Movimiento manual"):
+            return
         if self._manual_inflight:
             self._manual_pending = True
             self._set_status("Movimiento manual en curso…", error=False)
@@ -5974,28 +6505,7 @@ class ControlPanelV2(QMainWindow):
         self._kill_proc(self.moveit_proc, "move_group")
         self.moveit_bridge_proc = None
         self.moveit_proc = None
-        if self._started_bag:
-            subprocess.run(["bash", "-lc", "pkill -f 'ros2 bag record' || true"], check=False)
-        if self._started_bridge:
-            subprocess.run(["bash", "-lc", "pkill -f 'ros_gz_bridge' || true; pkill -f parameter_bridge || true"], check=False)
-        if self._started_release_service:
-            subprocess.run(["bash", "-lc", "pkill -f 'release_objects_service' || true"], check=False)
-        if self._started_world_tf:
-            subprocess.run(["bash", "-lc", "pkill -f 'world_tf_publisher' || true"], check=False)
-        if self._started_rsp:
-            subprocess.run(["bash", "-lc", "pkill -f 'robot_state_publisher' || true"], check=False)
-        if self._started_gazebo:
-            subprocess.run(
-                ["bash", "-lc", "pkill -f 'gz sim' || true; pkill -f gzserver || true; pkill -f gzclient || true; pkill -f 'ign gazebo' || true"],
-                check=False,
-            )
-        if self._started_moveit:
-            subprocess.run(
-                ["bash", "-lc", "pkill -f 'move_group' || true; pkill -f 'ur5_moveit_bringup.launch.py' || true"],
-                check=False,
-            )
-        if self._started_moveit_bridge:
-            subprocess.run(["bash", "-lc", "pkill -f 'ur5_moveit_bridge' || true"], check=False)
+        self._force_cleanup_leftovers()
         if self._moveit_node is not None:
             try:
                 self._moveit_node.destroy_node()
@@ -6012,6 +6522,50 @@ class ControlPanelV2(QMainWindow):
         self._emit_log("[TRACE] Shutdown: done")
         self._shutdown_complete = True
         super().closeEvent(event)
+
+    def _force_cleanup_leftovers(self) -> None:
+        """Forzar cierre de procesos residuales del stack."""
+        patterns = (
+            "ros2 bag record",
+            "ros_gz_bridge",
+            "parameter_bridge",
+            "gz sim",
+            "gz-sim",
+            "gzserver",
+            "gzclient",
+            "ign gazebo",
+            "ros2 launch ur5_bringup",
+            "ros2_control_node",
+            "robot_state_publisher",
+            "world_tf_publisher",
+            "release_objects_service",
+            "system_state_manager",
+            "controller_manager",
+            "spawner",
+            "move_group",
+        )
+        for sig in ("-TERM", "-KILL"):
+            for pat in patterns:
+                try:
+                    subprocess.run(["pkill", sig, "-f", pat], check=False)
+                except Exception:
+                    continue
+            time.sleep(0.2)
+        try:
+            res = subprocess.run(
+                [
+                    "pgrep",
+                    "-af",
+                    "ros2 bag record|ros_gz_bridge|parameter_bridge|gz sim|gz-sim|gzserver|gzclient|ign gazebo|ros2 launch ur5_bringup|ros2_control_node|robot_state_publisher|world_tf_publisher|controller_manager|spawner|move_group",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            if res.stdout:
+                self._emit_log(f"[WARN] Procesos residuales tras cierre:\n{res.stdout.strip()}")
+        except Exception:
+            pass
 
 
 def _normalize_joint_name(name) -> str:

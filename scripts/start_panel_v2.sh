@@ -19,7 +19,9 @@ export WS_DIR
 : "${ROS_DISTRO:=jazzy}"
 : "${PANEL_COLD_BOOT:=1}"          # 1 = mata procesos antes de arrancar
 : "${PANEL_V2_PREFER_INSTALLED:=1}"# 1 = usa install/.../panel_v2 si existe
-: "${PANEL_START_STACK:=0}"        # 1 = autoarranca RSP+Gazebo, 0 = solo panel (default)
+: "${PANEL_MODE:=manual}"          # manual=panel lanza Gazebo/bridge/MoveIt | auto=stack completo
+: "${PANEL_START_STACK:=0}"        # 1 = autoarranca RSP+Gazebo
+: "${PANEL_MANAGED:=0}"            # 1 = panel guiado por /system_state
 : "${RMW_IMPLEMENTATION:=rmw_fastrtps_cpp}"
 export RMW_IMPLEMENTATION
 
@@ -44,11 +46,52 @@ if [[ "$PANEL_COLD_BOOT" == "1" ]]; then
   pkill -f "ros2_control_node" 2>/dev/null || true
   pkill -f "controller_manager" 2>/dev/null || true
   pkill -f "spawner" 2>/dev/null || true
+  pkill -f "release_objects_service" 2>/dev/null || true
+  pkill -f "system_state_manager" 2>/dev/null || true
+  pkill -f "ros2 launch ur5_bringup" 2>/dev/null || true
 
   # Paneles previos (ajusta patrones si lo necesitas)
   pkill -f "ur5_qt_panel"      2>/dev/null || true
   pkill -f "panel_v2.py"       2>/dev/null || true
   pkill -f "main_panel.py"     2>/dev/null || true
+  pkill -f "ros2 run ur5_qt_panel panel_v2" 2>/dev/null || true
+
+  any_running() {
+    pgrep -af "ros2 bag record|ros_gz_bridge|parameter_bridge|gz sim|gz-sim|gzserver|gzclient|ign gazebo|ros2 launch ur5_bringup|ros2_control_node|robot_state_publisher|world_tf_publisher|controller_manager|spawner|move_group|ur5_qt_panel|panel_v2.py|main_panel.py" >/dev/null 2>&1
+  }
+
+  # Verificación: si quedan procesos, intentar cierre forzado.
+  for _ in {1..20}; do
+    if any_running; then
+      sleep 0.2
+    else
+      break
+    fi
+  done
+  if any_running; then
+    log "cold boot: procesos aún activos, forzando cierre..."
+    pkill -KILL -f "ros2 bag record" >/dev/null 2>&1 || true
+    pkill -KILL -f "ros_gz_bridge" >/dev/null 2>&1 || true
+    pkill -KILL -f "parameter_bridge" >/dev/null 2>&1 || true
+    pkill -KILL -f "gz sim" >/dev/null 2>&1 || true
+    pkill -KILL -f "gz-sim" >/dev/null 2>&1 || true
+    pkill -KILL -f "gzserver" >/dev/null 2>&1 || true
+    pkill -KILL -f "gzclient" >/dev/null 2>&1 || true
+    pkill -KILL -f "ign gazebo" >/dev/null 2>&1 || true
+    pkill -KILL -f "ros2 launch ur5_bringup" >/dev/null 2>&1 || true
+    pkill -KILL -f "ros2_control_node" >/dev/null 2>&1 || true
+    pkill -KILL -f "robot_state_publisher" >/dev/null 2>&1 || true
+    pkill -KILL -f "world_tf_publisher" >/dev/null 2>&1 || true
+    pkill -KILL -f "controller_manager" >/dev/null 2>&1 || true
+    pkill -KILL -f "spawner" >/dev/null 2>&1 || true
+    pkill -KILL -f "move_group" >/dev/null 2>&1 || true
+    pkill -KILL -f "release_objects_service" >/dev/null 2>&1 || true
+    pkill -KILL -f "system_state_manager" >/dev/null 2>&1 || true
+    pkill -KILL -f "ur5_qt_panel" >/dev/null 2>&1 || true
+    pkill -KILL -f "panel_v2.py" >/dev/null 2>&1 || true
+    pkill -KILL -f "main_panel.py" >/dev/null 2>&1 || true
+    pkill -KILL -f "ros2 run ur5_qt_panel panel_v2" >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- cargar entorno ROS2 + overlay ---
@@ -89,10 +132,54 @@ if [[ -z "${DISPLAY:-}" ]]; then
   export QT_QPA_PLATFORM=offscreen
 fi
 
+# Preparar modelo runtime con params reales para gz_ros2_control (panel lanza gz sim directamente).
+runtime_models_root="$WS_DIR/log/gz_models"
+runtime_ur5_model="$runtime_models_root/ur5_rg2"
+mkdir -p "$runtime_ur5_model"
+cp -a "$WS_DIR/models/ur5_rg2/." "$runtime_ur5_model/" 2>/dev/null || true
+controllers_yaml="$(python3 - <<'PY'
+from ament_index_python.packages import get_package_share_directory
+import os
+print(os.path.join(get_package_share_directory("ur5_description"), "config", "ur5_controllers.yaml"))
+PY
+)"
+if [[ -n "$controllers_yaml" && -f "$runtime_ur5_model/model.sdf" ]]; then
+  python3 - <<PY
+import re
+path = r"$runtime_ur5_model/model.sdf"
+params = r"$controllers_yaml"
+with open(path, "r", encoding="utf-8") as f:
+    text = f.read()
+pat = re.compile(r'(<plugin filename="gz_ros2_control-system"[^>]*>)(.*?)(</plugin>)', re.DOTALL)
+m = pat.search(text)
+if m:
+    header, body, footer = m.groups()
+    if "<parameters>" in body:
+        body = re.sub(r"<parameters>.*?</parameters>", f"<parameters>{params}</parameters>", body, flags=re.DOTALL)
+    else:
+        body = body + f"\n            <parameters>{params}</parameters>\n"
+    text = text[:m.start()] + header + body + footer + text[m.end():]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+PY
+  export GZ_SIM_RESOURCE_PATH="$runtime_models_root:$GZ_SIM_RESOURCE_PATH"
+fi
+
 log "Nota: start_panel_v2.sh es wrapper; usa ros2 launch ur5_bringup ur5_stack.launch.py"
 
 PANEL_START_ROS2_CONTROL="${PANEL_START_ROS2_CONTROL:-0}"
 PANEL_LAUNCH_BRIDGE="${PANEL_LAUNCH_BRIDGE:-$PANEL_START_STACK}"
+PANEL_LAUNCH_WORLD_TF="${PANEL_LAUNCH_WORLD_TF:-1}"
+PANEL_LAUNCH_SYSTEM_STATE="${PANEL_LAUNCH_SYSTEM_STATE:-1}"
+
+if [[ "${PANEL_MODE}" == "manual" ]]; then
+  PANEL_START_STACK="0"
+  PANEL_START_ROS2_CONTROL="0"
+  PANEL_LAUNCH_BRIDGE="0"
+  PANEL_LAUNCH_WORLD_TF="0"
+  PANEL_LAUNCH_SYSTEM_STATE="0"
+  PANEL_MANAGED="0"
+fi
 HEADLESS="true"
 if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
   HEADLESS="false"
@@ -103,6 +190,7 @@ LAUNCH_RSP="false"
 if [[ "${PANEL_START_STACK}" == "1" ]]; then
   LAUNCH_GZ="true"
   LAUNCH_RSP="true"
+  PANEL_MANAGED="1"
 fi
 
 LAUNCH_BRIDGE="false"
@@ -113,6 +201,19 @@ fi
 LAUNCH_ROS2_CONTROL="false"
 if [[ "${PANEL_START_ROS2_CONTROL}" == "1" ]]; then
   LAUNCH_ROS2_CONTROL="true"
+fi
+
+LAUNCH_WORLD_TF="false"
+if [[ "${PANEL_LAUNCH_WORLD_TF}" == "1" ]]; then
+  LAUNCH_WORLD_TF="true"
+fi
+
+LAUNCH_SYSTEM_STATE="false"
+if [[ "${PANEL_LAUNCH_SYSTEM_STATE}" == "1" ]]; then
+  LAUNCH_SYSTEM_STATE="true"
+fi
+if [[ "$LAUNCH_GZ" == "true" || "$LAUNCH_RSP" == "true" || "$LAUNCH_BRIDGE" == "true" || "$LAUNCH_ROS2_CONTROL" == "true" || "$LAUNCH_WORLD_TF" == "true" || "$LAUNCH_SYSTEM_STATE" == "true" ]]; then
+  PANEL_MANAGED="1"
 fi
 
 LAUNCH_FILE_PKG="ur5_stack.launch.py"
@@ -138,5 +239,8 @@ exec ros2 launch $LAUNCH_TARGET \
   launch_rsp:="$LAUNCH_RSP" \
   launch_bridge:="$LAUNCH_BRIDGE" \
   launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
+  launch_world_tf:="$LAUNCH_WORLD_TF" \
+  launch_system_state:="$LAUNCH_SYSTEM_STATE" \
+  panel_managed:="$PANEL_MANAGED" \
   panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
   panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"

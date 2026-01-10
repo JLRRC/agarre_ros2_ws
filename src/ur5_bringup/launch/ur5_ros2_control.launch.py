@@ -38,13 +38,6 @@ def generate_launch_description():
 
     robot_description = {"robot_description": robot_description_content}
 
-    rsp = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        output="screen",
-        parameters=[{"use_sim_time": use_sim_time}, robot_description],
-    )
-
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
@@ -55,25 +48,6 @@ def generate_launch_description():
             PathJoinSubstitution([FindPackageShare("ur5_bringup"), "config", controllers_yaml]),
         ],
     )
-    joint_state_broadcaster_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_state_broadcaster", "-c", "/controller_manager"],
-        output="screen",
-    )
-    joint_trajectory_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_trajectory_controller", "-c", "/controller_manager"],
-        output="screen",
-    )
-    gripper_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["gripper_controller", "-c", "/controller_manager"],
-        output="screen",
-    )
-
     return LaunchDescription([
         DeclareLaunchArgument("description_pkg", default_value="ur5_description"),
         DeclareLaunchArgument("xacro_file", default_value="ur5.urdf.xacro"),
@@ -82,9 +56,5 @@ def generate_launch_description():
         DeclareLaunchArgument("robot_name", default_value="ur5"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
 
-        rsp,
         ros2_control_node,
-        joint_state_broadcaster_spawner,
-        joint_trajectory_controller_spawner,
-        gripper_controller_spawner,
     ])

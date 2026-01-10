@@ -5,8 +5,8 @@
   <description>Minimal MoveIt 2 configuration for the UR5 robot.</description>
   <license>Apache-2.0</license>
 
-  <maintainer email="root@todo.todo">TODO</maintainer>
-  <author email="root@todo.todo">TODO</author>
+  <maintainer email="jesus.lozano.rodriguez@gmail.com">laboratorio</maintainer>
+  <author email="jesus.lozano.rodriguez@gmail.com">laboratorio</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -17,6 +17,8 @@
   <build_depend>moveit_ros_visualization</build_depend>
   <build_depend>moveit_msgs</build_depend>
   <build_depend>ur_description</build_depend>
+  <build_depend>moveit_configs_utils</build_depend>
+  <build_depend>ur5_description</build_depend>
 
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
@@ -25,6 +27,8 @@
   <exec_depend>moveit_ros_visualization</exec_depend>
   <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>ur_description</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>ur5_description</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

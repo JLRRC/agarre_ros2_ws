@@ -90,6 +90,7 @@ class ObjectRow(QWidget):
         self.name = name
         self.pos = (0.0, 0.0, 0.0)
         self.out = False
+        self.pickable = True
         self._hover = False
         self._selected = False
         self.setFixedHeight(16)
@@ -98,9 +99,10 @@ class ObjectRow(QWidget):
         self._font.setPointSize(7)
         self._font.setFamily("DejaVu Sans")
 
-    def set_state(self, x: float, y: float, z: float, out: bool):
+    def set_state(self, x: float, y: float, z: float, out: bool, pickable: bool = True):
         self.pos = (x, y, z)
         self.out = out
+        self.pickable = pickable
         self.update()
 
     def set_selected(self, selected: bool):
@@ -134,7 +136,7 @@ class ObjectRow(QWidget):
         bg = "#1f2937" if (self._hover or self._selected) else "transparent"
         painter.fillRect(self.rect(), QColor(bg))
         color = OBJECT_COLORS.get(self.name, "#e5e7eb")
-        if self.out:
+        if self.out or not self.pickable:
             color = "#9ca3af"
         painter.setPen(QPen(QColor("#0f172a"), 1))
         painter.setBrush(QColor(color))
@@ -150,7 +152,8 @@ class ObjectRow(QWidget):
         painter.setFont(self._font)
         x, y, _z = self.pos
         status = " (fuera)" if self.out else ""
-        text = f"{self.name}: ({x:.2f},{y:.2f}){status}"
+        lock = "🔒 " if not self.pickable else ""
+        text = f"{lock}{self.name}: ({x:.2f},{y:.2f}){status}"
         metrics = QFontMetrics(self._font)
         text = metrics.elidedText(text, Qt.ElideRight, self.width() - 28)
         painter.drawText(20, 12, text)
@@ -183,9 +186,14 @@ class ObjectListPanel(QWidget):
             "}"
         )
 
-    def update_objects(self, objects: Dict[str, Tuple[float, float, float]]):
+    def update_objects(
+        self,
+        objects: Dict[str, Tuple[float, float, float]],
+        pickable: Optional[Dict[str, bool]] = None,
+    ):
         if not self.isVisible():
             return
+        pickable = pickable or {}
         for name, (x, y, z) in sorted(objects.items()):
             if not visible_table_object(name, (x, y, z)):
                 continue
@@ -196,7 +204,7 @@ class ObjectListPanel(QWidget):
                 self.list_box.addWidget(row)
                 row.clicked.connect(self.selected.emit)
             out = object_out_of_reach(x, y)
-            row.set_state(x, y, z, out)
+            row.set_state(x, y, z, out, pickable.get(name, True))
 
     def set_selected(self, name: Optional[str], text: str):
         for obj, row in self._rows.items():
