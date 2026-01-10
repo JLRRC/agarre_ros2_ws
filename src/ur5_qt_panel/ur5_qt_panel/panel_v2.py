@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import json
+from enum import Enum
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
@@ -24,7 +25,7 @@ try:
 except Exception:
     psutil = None
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QMetaObject, Q_ARG
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -79,6 +80,10 @@ from .panel_config import (
     UR5_JOINT_NAMES,
     GRIPPER_JOINT_NAMES,
     GRIPPER_ATTACH_PREFIX,
+    UR5_BASE_X,
+    UR5_BASE_Y,
+    UR5_BASE_Z,
+    UR5_MODEL_NAME,
     BASKET_DROP,
     WORLD_FRAME,
     WORLDS_DIR,
@@ -129,6 +134,7 @@ from .panel_utils import (
     debug_dump_tf,
     rclpy,
     ROBOT_FRAME_KEYWORDS,
+    gripper_controller_defined,
 )
 from .logging_utils import timestamped_line
 
@@ -137,11 +143,51 @@ from rclpy.node import Node
 from rclpy.time import Time
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from std_srvs.srv import Trigger
+try:
+    from controller_manager_msgs.srv import ListControllers
+except Exception:
+    ListControllers = None
+try:
+    from rclpy.action import ActionClient
+    from control_msgs.action import FollowJointTrajectory
+    from moveit_msgs.action import MoveGroup
+except Exception:
+    ActionClient = None
+    FollowJointTrajectory = None
+    MoveGroup = None
 
 CAMERA_TOPIC_PREFIX = "/camera"
 CAMERA_DISPLAY_INTERVAL_MS = 80
 SELECTION_TIMEOUT_SEC = float(os.environ.get("PANEL_SELECTION_TIMEOUT_SEC", "12.0"))
 MOVEIT_POSE_TOPIC = "/desired_grasp"
+TRAJ_ACTION_FALLBACK = os.environ.get("PANEL_TRAJ_ACTION_FALLBACK", "1") == "1"
+TRAJ_ACTION_FALLBACK_DELAY_SEC = float(os.environ.get("PANEL_TRAJ_ACTION_FALLBACK_DELAY_SEC", "1.0"))
+TRAJ_ACTION_FALLBACK_EPS_RAD = float(os.environ.get("PANEL_TRAJ_ACTION_FALLBACK_EPS_RAD", "0.002"))
+TRAJ_ACTION_FALLBACK_TIMEOUT_SEC = float(os.environ.get("PANEL_TRAJ_ACTION_FALLBACK_TIMEOUT_SEC", "2.0"))
+CONTROLLER_READY_TIMEOUT_SEC = float(os.environ.get("PANEL_CONTROLLER_READY_TIMEOUT_SEC", "3.0"))
+MOVEIT_READY_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_READY_TIMEOUT_SEC", "20.0"))
+TRACE_PRINT_PERIOD_SEC = float(os.environ.get("PANEL_TRACE_PRINT_PERIOD_SEC", "3.0"))
+DEBUG_POSES_PERIOD_SEC = float(os.environ.get("PANEL_DEBUG_POSES_PERIOD_SEC", "3.0"))
+PICK_LOG_MIN_INTERVAL_SEC = float(os.environ.get("PANEL_PICK_LOG_MIN_INTERVAL_SEC", "2.0"))
+
+
+class SystemState(Enum):
+    BOOTING = "BOOTING"
+    WAITING_GAZEBO = "WAITING_GAZEBO"
+    WAITING_CONTROLLERS = "WAITING_CONTROLLERS"
+    WAITING_TF = "WAITING_TF"
+    WAITING_CAMERA = "WAITING_CAMERA"
+    WAITING_SETTLE = "WAITING_SETTLE"
+    READY = "READY"
+    ERROR = "ERROR"
+
+
+class MoveItState(Enum):
+    OFF = "OFF"
+    STARTING = "STARTING"
+    WAITING_MOVEIT_READY = "WAITING_MOVEIT_READY"
+    READY = "READY"
+    ERROR = "ERROR"
 DROP_OBJECT_NAMES = [
     "drop_obj_01_box_cube",
     "drop_obj_02_box_flat",
@@ -164,6 +210,8 @@ SETTLE_PATTERNS = ("drop_obj_",)
 SETTLE_MANUAL = {"cubo_rojo", "cilindro_verde", "caja_azul", "pieza_pick_mesa"}
 ALLOW_UNSETTLED_ON_TIMEOUT = bool(int(os.environ.get("PANEL_ALLOW_UNSETTLED_ON_TIMEOUT", "0")))
 CAMERA_READY_FRAMES = int(os.environ.get("PANEL_CAMERA_READY_FRAMES", "3"))
+CAMERA_INIT_GRACE_SEC = float(os.environ.get("PANEL_CAMERA_INIT_GRACE_SEC", "4.0"))
+TF_INIT_GRACE_SEC = float(os.environ.get("PANEL_TF_INIT_GRACE_SEC", "3.0"))
 CONTROLLER_CHECK_INTERVAL_SEC = 3.0
 POSE_INFO_MAX_AGE_SEC = float(os.environ.get("PANEL_POSE_INFO_MAX_AGE_SEC", "1.0"))
 POSE_INFO_POLL_SEC = float(os.environ.get("PANEL_POSE_INFO_POLL_SEC", "0.5"))
@@ -360,6 +408,28 @@ class _PanelLogger:
 class ControlPanelV2(QMainWindow):
     retry_send_joints = pyqtSignal()
     status_updated = pyqtSignal(bool, bool, bool, bool, bool, bool, bool)
+    signal_status = pyqtSignal(str, bool)
+    signal_refresh_controls = pyqtSignal()
+    signal_set_led = pyqtSignal(object, str)
+    signal_update_objects = pyqtSignal()
+    signal_start_objects_settle_watch = pyqtSignal()
+    signal_handle_objects_settled = pyqtSignal()
+    signal_schedule_camera_health_check = pyqtSignal(int)
+    signal_update_camera_topics = pyqtSignal(object)
+    signal_connect_camera = pyqtSignal()
+    signal_request_auto_bridge_start = pyqtSignal()
+    signal_bridge_ready = pyqtSignal()
+    signal_calibration_check = pyqtSignal()
+    signal_trace_ready = pyqtSignal()
+    signal_schedule_home_offset = pyqtSignal(int, int)
+    signal_close_panel = pyqtSignal()
+    signal_tf_ready = pyqtSignal(bool)
+    signal_calib_ready = pyqtSignal(bool)
+    signal_controllers_ready = pyqtSignal(bool)
+    signal_error = pyqtSignal(str)
+    signal_moveit_state = pyqtSignal(str, str)
+    def _ui_set_status(self, text: str, error: bool = False) -> None:
+        self.signal_status.emit(text, error)
 
     def _camera_health_check(self):
         """Chequeo periódico: si no llegan imágenes, log throttled y alerta visual."""
@@ -417,6 +487,7 @@ class ControlPanelV2(QMainWindow):
         self.moveit_proc = None
         self.moveit_bridge_proc = None
         self.release_service_proc = None
+        self.world_tf_proc = None
         self.rsp_proc = None
         self.gz_partition = ""
         self._status_check_inflight = False
@@ -431,14 +502,48 @@ class ControlPanelV2(QMainWindow):
         self._tf_not_ready_logged = False
         self._trace_ready = False
         self._bridge_ready = False
-        self._trace_print_period = 1.0
+        self._trace_print_period = max(0.5, TRACE_PRINT_PERIOD_SEC)
         self._ee_warn_period = 5.0
         self._trace_debug_logged = False
         self._panel_logger = _PanelLogger(self)
+        self._system_state = SystemState.BOOTING
+        self._system_state_reason = "boot"
+        self._system_error_reason = ""
+        self._tf_invalid = False
+        self._moveit_state = MoveItState.OFF
+        self._moveit_state_reason = "manual"
+        self._moveit_block_reason: Optional[str] = None
+        self.signal_status.connect(self._set_status_async)
+        self.signal_refresh_controls.connect(self._refresh_controls)
+        self.signal_set_led.connect(self._set_led_async)
+        self.signal_update_objects.connect(self._update_objects)
+        self.signal_start_objects_settle_watch.connect(self._start_objects_settle_watch)
+        self.signal_handle_objects_settled.connect(self._handle_objects_settled)
+        self.signal_schedule_camera_health_check.connect(self._schedule_camera_health_check)
+        self.signal_update_camera_topics.connect(self._update_camera_topics_async)
+        self.signal_connect_camera.connect(self._connect_camera)
+        self.signal_request_auto_bridge_start.connect(self._request_auto_bridge_start)
+        self.signal_bridge_ready.connect(self._on_bridge_ready)
+        self.signal_calibration_check.connect(self._on_calibration_check)
+        self.signal_trace_ready.connect(self._on_trace_ready)
+        self.signal_schedule_home_offset.connect(self._schedule_home_offset_retry)
+        self.signal_close_panel.connect(self.close)
+        self.signal_tf_ready.connect(self._on_tf_ready_signal)
+        self.signal_calib_ready.connect(self._on_calib_ready_signal)
+        self.signal_controllers_ready.connect(self._on_controllers_ready_signal)
+        self.signal_error.connect(self._on_error_signal)
+        self.signal_moveit_state.connect(self._on_moveit_state_signal)
         self._moveit_node: Optional[Node] = None
         self._moveit_pose_pub = None
         self._traj_pub = None
         self._traj_topic = ""
+        self._traj_action_client = None
+        self._traj_action_name = ""
+        self._traj_action_inflight = False
+        self._traj_fallback_last_ts = 0.0
+        self._moveit_action_client = None
+        self._controller_client = None
+        self._controller_client_name = ""
         self._objects_settled = False
         self._objects_seen_fall = False
         self._settle_worker_active = False
@@ -463,6 +568,7 @@ class ControlPanelV2(QMainWindow):
         self._started_moveit = False
         self._started_moveit_bridge = False
         self._started_release_service = False
+        self._started_world_tf = False
         self._started_rsp = False
         self._started_bag = False
         self._detach_inflight = False
@@ -474,6 +580,8 @@ class ControlPanelV2(QMainWindow):
         self._trace_transform_warn_period = 5.0
         self._pick_disable_warn_ts = 0.0
         self._pick_tf_inflight = False
+        self._pick_log_last_sig = ""
+        self._pick_log_last_ts = 0.0
         self._fall_test_active = False
         self._settle_log_once_done = False
         self._settle_log_snapshot_next = False
@@ -496,6 +604,8 @@ class ControlPanelV2(QMainWindow):
         self._last_joint_positions: Dict[str, float] = {}
         self._last_joint_time: float = 0.0
         self._last_joint_stamp: float = 0.0
+        self._joint_current_topic = ""
+        self._joint_active = False
         self.dof_pos_labels: Dict[str, QLabel] = {}
         self.dof_vel_labels: Dict[str, QLabel] = {}
         self.gripper_labels: Dict[str, QLabel] = {}
@@ -526,6 +636,8 @@ class ControlPanelV2(QMainWindow):
         self._controllers_ok = False
         self._controllers_reason = "controladores no verificados"
         self._last_controller_check = 0.0
+        self._controller_spawn_inflight = False
+        self._controller_spawn_done = False
         self._selected_px = None  # Píxel seleccionado (px, py)
         self._selected_world = None  # Coordenadas del mundo (x, y)
         self._last_tf_status: Optional[Dict[str, object]] = None
@@ -542,6 +654,9 @@ class ControlPanelV2(QMainWindow):
         self.trace_table: Optional[QTableWidget] = None
         self.chk_trace_freeze: Optional[QCheckBox] = None
         self._spawn_positions_snapshot = get_object_positions()
+        self._external_state: Optional[str] = None
+        self._external_state_reason: str = ""
+        self._external_state_last: float = 0.0
         self._emit_log(
             f"[STARTUP] panel_v2 argv0={os.path.abspath(sys.argv[0])} file={os.path.abspath(__file__)}"
         )
@@ -551,11 +666,14 @@ class ControlPanelV2(QMainWindow):
         self.lbl_trace_tf_translation: Optional[QLabel] = None
         self.lbl_trace_tf_yaw: Optional[QLabel] = None
         self.btn_copy_trace: Optional[QPushButton] = None
+        self.lbl_moveit_status: Optional[QLabel] = None
+        self.lbl_moveit_bridge_status: Optional[QLabel] = None
         self._trace_cached_text = ""
         self._pose_stream_proc = {}  # Slot para proceso de stream de poses
         self._pose_debug_timer: Optional[QTimer] = None
         self._auto_bridge_attempts = 0
         self._auto_bridge_timer_scheduled = False
+        self._bridge_start_ts = 0.0
         self.runner = CmdRunner()
         self.runner.line.connect(lambda msg: self._log(msg))
         self._emit_log("[STARTUP] Limpieza de procesos fantasma")
@@ -569,6 +687,7 @@ class ControlPanelV2(QMainWindow):
         self.ros_worker.image.connect(self._on_image)
         self.ros_worker.joint_state.connect(self._on_joint_state)
         self.ros_worker.log.connect(self._log_ros_message)
+        self.ros_worker.system_state.connect(self._on_system_state_update)
         self._ros_worker_started = False
         self._calibration_ready = False
         self._last_calib_block_log = 0.0
@@ -671,11 +790,100 @@ class ControlPanelV2(QMainWindow):
                 self._traj_pub = None
         return self._traj_pub
 
+    def _traj_action_target(self, traj_topic: str) -> str:
+        if not traj_topic:
+            return ""
+        base = traj_topic.rsplit("/joint_trajectory", 1)[0]
+        return f"{base}/follow_joint_trajectory"
+
+    def _joint_motion_since(self, snapshot: Dict[str, float]) -> bool:
+        if not snapshot:
+            return False
+        for name, prev in snapshot.items():
+            curr = self._last_joint_positions.get(name)
+            if curr is None:
+                continue
+            if abs(curr - prev) > TRAJ_ACTION_FALLBACK_EPS_RAD:
+                return True
+        return False
+
+    def _send_joint_trajectory_action(self, positions: List[float], sec: float, traj_topic: str) -> Tuple[bool, str]:
+        if not ROS_AVAILABLE or ActionClient is None or FollowJointTrajectory is None:
+            return False, "Action FollowJointTrajectory no disponible"
+        if self._moveit_node is None:
+            return False, "Nodo ROS no listo"
+        action_name = self._traj_action_target(traj_topic)
+        if not action_name:
+            return False, "Action target vacío"
+        if self._traj_action_client is None or self._traj_action_name != action_name:
+            try:
+                self._traj_action_client = ActionClient(self._moveit_node, FollowJointTrajectory, action_name)
+                self._traj_action_name = action_name
+            except Exception as exc:
+                self._traj_action_client = None
+                self._traj_action_name = ""
+                return False, f"ActionClient error: {exc}"
+        client = self._traj_action_client
+        if client is None:
+            return False, "ActionClient no disponible"
+        if not client.wait_for_server(timeout_sec=1.5):
+            return False, f"Action server no disponible: {action_name}"
+        sec = max(0.0, float(sec))
+        sec_i = int(sec)
+        nsec_i = int((sec - sec_i) * 1e9)
+        goal = FollowJointTrajectory.Goal()
+        traj = JointTrajectory()
+        traj.joint_names = list(UR5_JOINT_NAMES)
+        point = JointTrajectoryPoint()
+        point.positions = [round(p, 4) for p in positions]
+        point.time_from_start.sec = sec_i
+        point.time_from_start.nanosec = nsec_i
+        traj.points = [point]
+        goal.trajectory = traj
+        future = client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self._moveit_node, future, timeout_sec=TRAJ_ACTION_FALLBACK_TIMEOUT_SEC)
+        goal_handle = future.result() if future.done() else None
+        if not goal_handle or not goal_handle.accepted:
+            return False, "Goal rechazado"
+        return True, action_name
+
+    def _schedule_traj_action_fallback(self, positions: List[float], sec: float, traj_topic: str) -> None:
+        if not TRAJ_ACTION_FALLBACK:
+            return
+        if self._traj_action_inflight:
+            return
+        now = time.time()
+        if (now - self._traj_fallback_last_ts) < 1.0:
+            return
+        snapshot = dict(self._last_joint_positions)
+
+        def worker():
+            time.sleep(TRAJ_ACTION_FALLBACK_DELAY_SEC)
+            if self._closing:
+                return
+            if self._joint_motion_since(snapshot):
+                return
+            self._traj_action_inflight = True
+            try:
+                ok, info = self._send_joint_trajectory_action(positions, sec, traj_topic)
+                if ok:
+                    self._traj_fallback_last_ts = time.time()
+                    self._emit_log(f"[ROBOT] Fallback action en {info}")
+                else:
+                    self._emit_log(f"[ROBOT] Fallback action falló: {info}")
+            finally:
+                self._traj_action_inflight = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _publish_joint_trajectory(self, positions: List[float], sec: float) -> Tuple[bool, str]:
         if not self._ros_worker_started:
             self._ensure_ros_worker_started()
         if not self.ros_worker.node_ready():
             return False, "Nodo ROS no listo"
+        ok, reason = self._wait_for_controllers_ready(CONTROLLER_READY_TIMEOUT_SEC)
+        if not ok:
+            return False, f"controladores no listos: {reason}"
         topic = self._select_traj_topic()
         if not topic:
             return False, "joint_trajectory_controller no disponible"
@@ -697,9 +905,18 @@ class ControlPanelV2(QMainWindow):
         point.time_from_start.nanosec = nsec_i
         traj.points = [point]
         pub.publish(traj)
+        self._schedule_traj_action_fallback(positions, sec, topic)
         return True, topic
 
     def _publish_moveit_pose(self, label: str, pose_data: Dict[str, object]) -> None:
+        if self._moveit_state != MoveItState.READY:
+            reason = self._moveit_state_reason or "MoveIt no listo"
+            if reason != self._moveit_block_reason:
+                self._set_status(f"MoveIt no listo; bloqueando {label}", error=True)
+                self._emit_log(f"[MOVEIT] Bloqueado: {label} ({reason})")
+                self._moveit_block_reason = reason
+            return
+        self._moveit_block_reason = None
         if self._moveit_pose_pub is None or self._moveit_node is None:
             self._log(f"[Panel] LEGACY: MoveIt publisher no inicializado - no se envió pose {label}.")
             return
@@ -755,7 +972,7 @@ class ControlPanelV2(QMainWindow):
         self._spawn_positions_snapshot = get_object_positions()
         self._emit_log(f"[PHYSICS] Revalidar settle: {reason}")
         if restart and self._gz_running:
-            QMetaObject.invokeMethod(self, "_start_objects_settle_watch", Qt.QueuedConnection)
+            self.signal_start_objects_settle_watch.emit()
 
     def _run_fall_test_async(self) -> None:
         if self._fall_test_active or not self._gz_running or self._closing:
@@ -821,31 +1038,19 @@ class ControlPanelV2(QMainWindow):
         self._objects_settled = settled
         if settled:
             self._emit_log("[PHYSICS][SETTLE] OK")
-            QMetaObject.invokeMethod(self, "_handle_objects_settled", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(
-                self,
-                "_set_status_async",
-                Qt.QueuedConnection,
-                Q_ARG(str, "Objetos estabilizados"),
-                Q_ARG(bool, False),
-            )
+            self.signal_handle_objects_settled.emit()
+            self.signal_status.emit("Objetos estabilizados", False)
         else:
             self._emit_log("[PHYSICS][SETTLE] Timeout: objetos no estabilizados.")
-            QMetaObject.invokeMethod(
-                self,
-                "_set_status_async",
-                Qt.QueuedConnection,
-                Q_ARG(str, "Timeout: objetos no estabilizados"),
-                Q_ARG(bool, True),
-            )
+            self.signal_status.emit("Timeout: objetos no estabilizados", True)
         self._settle_worker_active = False
-        QTimer.singleShot(0, self._refresh_controls)
+        self.signal_refresh_controls.emit()
 
     @pyqtSlot()
     def _handle_objects_settled(self) -> None:
         self._refresh_controls()
         if self._bridge_running and not self._calibration_ready:
-            self._ensure_calibration_ready()
+            self.signal_calibration_check.emit()
 
     def _log_calib_blocked(self, reason: str) -> None:
         now = time.time()
@@ -1253,9 +1458,11 @@ class ControlPanelV2(QMainWindow):
         status_grid.addWidget(self.led_ros2, 2, 1)
         status_grid.addWidget(QLabel("UR5 (sim)"), 2, 2)
         status_grid.addWidget(self.led_ur5, 2, 3)
-        status_grid.addWidget(QLabel("MoveIt"), 3, 0)
+        self.lbl_moveit_status = QLabel("MoveIt (OFF)")
+        status_grid.addWidget(self.lbl_moveit_status, 3, 0)
         status_grid.addWidget(self.led_moveit, 3, 1)
-        status_grid.addWidget(QLabel("MoveIt bridge"), 3, 2)
+        self.lbl_moveit_bridge_status = QLabel("MoveIt bridge")
+        status_grid.addWidget(self.lbl_moveit_bridge_status, 3, 2)
         status_grid.addWidget(self.led_moveit_bridge, 3, 3)
         status_group.setLayout(status_grid)
         controls_status_row.addWidget(status_group, 1)
@@ -1604,6 +1811,131 @@ class ControlPanelV2(QMainWindow):
     def _set_status_async(self, text: str, error: bool = False) -> None:
         self._set_status(text, error=error)
 
+    @pyqtSlot(object, str)
+    def _set_led_async(self, led_obj: object, state: str) -> None:
+        set_led(led_obj, state)
+
+    @pyqtSlot(bool)
+    def _on_tf_ready_signal(self, ready: bool) -> None:
+        self._tf_ready_state = ready
+        if not ready:
+            self._trace_ready = False
+        self._evaluate_system_state()
+        self._refresh_controls()
+
+    @pyqtSlot(bool)
+    def _on_calib_ready_signal(self, ready: bool) -> None:
+        self._calibration_ready = ready
+        self._evaluate_system_state()
+        self._refresh_controls()
+
+    @pyqtSlot(bool)
+    def _on_controllers_ready_signal(self, ready: bool) -> None:
+        self._controllers_ok = ready
+        self._evaluate_system_state()
+        self._refresh_controls()
+
+    @pyqtSlot(str)
+    def _on_error_signal(self, msg: str) -> None:
+        self._system_error_reason = msg
+        self._set_system_state(SystemState.ERROR, msg)
+        self._set_status(msg, error=True)
+        self._refresh_controls()
+
+    @pyqtSlot(str, str)
+    def _on_moveit_state_signal(self, state: str, reason: str) -> None:
+        try:
+            state_enum = MoveItState[state]
+        except KeyError:
+            return
+        self._moveit_state = state_enum
+        self._moveit_state_reason = reason or state_enum.value
+        if state_enum == MoveItState.OFF:
+            set_led(self.led_moveit, "off")
+        elif state_enum == MoveItState.STARTING:
+            set_led(self.led_moveit, "warn")
+        elif state_enum == MoveItState.WAITING_MOVEIT_READY:
+            set_led(self.led_moveit, "warn")
+        elif state_enum == MoveItState.READY:
+            set_led(self.led_moveit, "on")
+        else:
+            set_led(self.led_moveit, "error")
+            if reason:
+                self._set_status(f"MoveIt error: {reason}", error=True)
+        if reason and self._debug_logs_enabled:
+            self._emit_log(f"[MOVEIT] {state_enum.value}: {reason}")
+        self._update_moveit_status_label()
+        self._refresh_controls()
+
+    @pyqtSlot()
+    def _on_trace_ready(self) -> None:
+        if self._trace_ready:
+            return
+        self._trace_ready = True
+        self._bridge_ready = True
+        self._stop_tf_ready_timer()
+        self._log("[TRACE] TF ready → TRACE enabled")
+        self._refresh_trace_data()
+
+    @pyqtSlot()
+    def _on_calibration_check(self) -> None:
+        if self._calibration_ready:
+            return
+        if not self._objects_settled:
+            self._log_calib_blocked("esperando caída/estabilidad de objetos")
+            return
+        if not self._pose_info_ready:
+            self._log_calib_blocked("pose/info no disponible")
+            return
+        if not self._tf_ready_state:
+            self._log_calib_blocked("TF world->base_link no disponible")
+            return
+        if not self._camera_stream_ok:
+            self._log_calib_blocked("cámara no publica")
+            return
+        self._log("[CALIB] Inicializando calibración tras bridge")
+        self._load_table_calibration()
+        self._refresh_objects_from_gz_async()
+        QTimer.singleShot(1500, self._refresh_objects_from_gz_async)
+        QTimer.singleShot(4000, self._refresh_objects_from_gz_async)
+        self._calibration_ready = True
+        self.signal_calib_ready.emit(True)
+
+    def _set_system_state(self, state: SystemState, reason: str) -> None:
+        if self._system_state == state and self._system_state_reason == reason:
+            return
+        self._system_state = state
+        self._system_state_reason = reason
+        self._emit_log(f"[STATE] {state.value} ({reason})")
+
+    def _evaluate_system_state(self) -> None:
+        if self._system_error_reason:
+            self._set_system_state(SystemState.ERROR, self._system_error_reason)
+            return
+        if not self._gz_running:
+            self._set_system_state(SystemState.WAITING_GAZEBO, "Gazebo no activo")
+            return
+        if not self._controllers_ok:
+            self._set_system_state(SystemState.WAITING_CONTROLLERS, self._controllers_reason)
+            return
+        if not self._tf_ready_state:
+            self._set_system_state(SystemState.WAITING_TF, "TF world->base_link no disponible")
+            return
+        if not self._bridge_running or not self._camera_stream_ok:
+            self._set_system_state(SystemState.WAITING_CAMERA, "Cámara/bridge no listos")
+            return
+        if not self._objects_settled:
+            self._set_system_state(SystemState.WAITING_SETTLE, "Objetos no estabilizados")
+            return
+        if not self._calibration_ready:
+            self._set_system_state(SystemState.WAITING_SETTLE, "Calibración pendiente")
+            return
+        if self._moveit_state != MoveItState.READY:
+            reason = self._moveit_state_reason or "MoveIt no listo"
+            self._set_system_state(SystemState.WAITING_SETTLE, reason)
+            return
+        self._set_system_state(SystemState.READY, "Sistema listo")
+
     @pyqtSlot(object)
     def _update_camera_topics_async(self, topics: object) -> None:
         self._update_camera_topics(list(topics) if topics else [])
@@ -1635,6 +1967,46 @@ class ControlPanelV2(QMainWindow):
         if not self._bridge_running:
             return
         self._emit_log(msg)
+
+    @pyqtSlot(str, str)
+    def _on_system_state_update(self, state: str, reason: str) -> None:
+        state = (state or "").strip().upper()
+        if not state:
+            return
+        self._external_state = state
+        self._external_state_reason = reason or ""
+        self._external_state_last = time.time()
+
+    def _external_state_active(self) -> bool:
+        if not self._external_state:
+            return False
+        return (time.time() - self._external_state_last) < 2.0
+
+    def _apply_external_system_state(self) -> None:
+        state = (self._external_state or "").upper()
+        reason = self._external_state_reason or ""
+        mapping = {
+            "BOOTING": SystemState.BOOTING,
+            "WAITING_GAZEBO": SystemState.WAITING_GAZEBO,
+            "WAITING_CONTROLLERS": SystemState.WAITING_CONTROLLERS,
+            "WAITING_TF": SystemState.WAITING_TF,
+            "WAITING_CAMERA": SystemState.WAITING_CAMERA,
+            "WAITING_SETTLE": SystemState.WAITING_SETTLE,
+            "READY": SystemState.READY,
+            "ERROR": SystemState.ERROR,
+        }
+        target = mapping.get(state)
+        if target is None:
+            return
+        if target == SystemState.READY and self._moveit_state != MoveItState.READY:
+            reason = self._moveit_state_reason or "MoveIt no listo"
+            self._set_system_state(SystemState.WAITING_SETTLE, reason)
+            return
+        if target == SystemState.ERROR:
+            self._system_error_reason = reason or self._system_error_reason
+        else:
+            self._system_error_reason = ""
+        self._set_system_state(target, reason or f"Estado externo: {state}")
 
     def _log_camera_diagnostics(self, reason: str):
         """Emitir detalles adicionales para debugging cuando hay fallos de cámara."""
@@ -1674,12 +2046,27 @@ class ControlPanelV2(QMainWindow):
     def _ros2_control_available(self) -> bool:
         if not self._ros_worker_started or not self.ros_worker.node_ready():
             return False
-        return self.ros_worker.has_service("/controller_manager/list_controllers")
+        return bool(self._controller_manager_path())
+
+    def _controller_manager_path(self) -> str:
+        if not self._ros_worker_started or not self.ros_worker.node_ready():
+            return ""
+        try:
+            services = self.ros_worker.service_names_and_types()
+        except Exception:
+            services = []
+        for name, _types in services:
+            if name.endswith("/controller_manager/list_controllers"):
+                return name.rsplit("/list_controllers", 1)[0]
+        return "/controller_manager"
 
     def _select_traj_topic(self) -> str:
         topics = set(self.ros_worker.list_topic_names()) if self.ros_worker.node_ready() else set()
         if "/joint_trajectory_controller/joint_trajectory" in topics:
             return "/joint_trajectory_controller/joint_trajectory"
+        candidates = sorted(t for t in topics if t.endswith("/joint_trajectory_controller/joint_trajectory"))
+        if candidates:
+            return candidates[0]
         return ""
 
     def _ensure_pose_subscription(self) -> None:
@@ -1738,7 +2125,7 @@ class ControlPanelV2(QMainWindow):
             self._pose_info_ready = True
             self._pose_info_diag_logged = False
             if self._gz_running:
-                QMetaObject.invokeMethod(self, "_start_objects_settle_watch", Qt.QueuedConnection)
+                self.signal_start_objects_settle_watch.emit()
                 QTimer.singleShot(0, self._schedule_physics_runtime_check)
         elif not ready:
             self._pose_info_ready = False
@@ -1862,65 +2249,115 @@ class ControlPanelV2(QMainWindow):
             if not self._ros_worker_started:
                 self._ensure_ros_worker_started()
             if not self.ros_worker.node_ready():
-                QMetaObject.invokeMethod(
-                    self,
-                    "_set_status_async",
-                    Qt.QueuedConnection,
-                    Q_ARG(str, "Nodo ROS no listo para tópicos"),
-                    Q_ARG(bool, True),
-                )
+                self.signal_status.emit("Nodo ROS no listo para tópicos", True)
                 return
             topics = self.ros_worker.topic_names_and_types()
             candidates = [name for name, _types in topics if _is_camera_topic(name)]
             if candidates:
                 self._log(f"[CAMERA] Candidate topics: {', '.join(candidates)}")
-                QMetaObject.invokeMethod(
-                    self,
-                    "_update_camera_topics_async",
-                    Qt.QueuedConnection,
-                    Q_ARG(object, candidates),
-                )
-                QMetaObject.invokeMethod(
-                    self,
-                    "_set_status_async",
-                    Qt.QueuedConnection,
-                    Q_ARG(str, f"Detectados {len(candidates)} tópicos de cámara"),
-                    Q_ARG(bool, False),
-                )
+                self.signal_update_camera_topics.emit(candidates)
+                self.signal_status.emit(f"Detectados {len(candidates)} tópicos de cámara", False)
             else:
                 if self._camera_stream_ok or self._camera_frame_count > 0 or self._camera_subscribed:
                     self._log("[CAMERA] Tópicos aún no visibles en discovery (reintentando)")
-                    QMetaObject.invokeMethod(
-                        self,
-                        "_set_status_async",
-                        Qt.QueuedConnection,
-                        Q_ARG(str, "Discovery cámara pendiente (reintentando)"),
-                        Q_ARG(bool, False),
-                    )
-                    QMetaObject.invokeMethod(
-                        self,
-                        "_schedule_camera_health_check",
-                        Qt.QueuedConnection,
-                        Q_ARG(int, 2000),
-                    )
+                    self.signal_status.emit("Discovery cámara pendiente (reintentando)", False)
+                    self.signal_schedule_camera_health_check.emit(2000)
                 else:
                     self._log("[CAMERA] No se encontraron tópicos compatibles")
-                    QMetaObject.invokeMethod(
-                        self,
-                        "_set_status_async",
-                        Qt.QueuedConnection,
-                        Q_ARG(str, "No se detectaron tópicos de cámara"),
-                        Q_ARG(bool, False),
-                    )
+                    self.signal_status.emit("No se detectaron tópicos de cámara", False)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _controllers_ready(self) -> Tuple[bool, str]:
         if not self._ros_worker_started or not self.ros_worker.node_ready():
             return False, "nodo ROS no listo"
-        if self._ros2_control_available():
-            return True, "controller_manager disponible"
-        return False, "controller_manager no disponible"
+        cm_path = self._controller_manager_path()
+        if not cm_path:
+            return False, "controller_manager no disponible"
+        list_srv = f"{cm_path}/list_controllers"
+        if not self.ros_worker.has_service(list_srv):
+            return False, "list_controllers no disponible"
+        resp, err = self._list_controllers(list_srv)
+        if resp is None:
+            return False, err or "no response"
+        required = ["joint_state_broadcaster", "joint_trajectory_controller"]
+        if gripper_controller_defined():
+            required.append("gripper_controller")
+        state_map = {c.name: c.state for c in resp.controller}
+        missing = [name for name in required if name not in state_map]
+        if missing:
+            return False, f"controllers missing: {', '.join(missing)}"
+        inactive = []
+        loaded = []
+        unknown = []
+        for name in required:
+            state = state_map.get(name, "")
+            kind = self._controller_state_kind(state)
+            if kind == "ACTIVE":
+                continue
+            if kind == "INACTIVE":
+                inactive.append(name)
+            elif kind == "LOADED":
+                loaded.append(name)
+            else:
+                unknown.append(name)
+        if inactive or loaded or unknown:
+            detail = []
+            if inactive:
+                detail.append(f"inactive: {', '.join(inactive)}")
+            if loaded:
+                detail.append(f"loaded: {', '.join(loaded)}")
+            if unknown:
+                detail.append(f"unknown: {', '.join(unknown)}")
+            return False, "controllers not active (" + " | ".join(detail) + ")"
+        return True, "controllers activos"
+
+    def _controller_state_kind(self, state: str) -> str:
+        state_lc = (state or "").strip().lower()
+        if state_lc == "active":
+            return "ACTIVE"
+        if state_lc == "inactive":
+            return "INACTIVE"
+        if state_lc in ("unconfigured", "finalized"):
+            return "LOADED"
+        return "UNKNOWN"
+
+    def _list_controllers(self, service_name: str) -> Tuple[Optional["ListControllers.Response"], Optional[str]]:
+        if ListControllers is None:
+            return None, "ListControllers no disponible"
+        if self._moveit_node is None:
+            return None, "Nodo ROS no listo"
+        if not service_name:
+            return None, "service vacío"
+        if self._controller_client is None or self._controller_client_name != service_name:
+            try:
+                self._controller_client = self._moveit_node.create_client(ListControllers, service_name)
+                self._controller_client_name = service_name
+            except Exception as exc:
+                self._controller_client = None
+                self._controller_client_name = ""
+                return None, f"client error: {exc}"
+        client = self._controller_client
+        if client is None:
+            return None, "client no disponible"
+        if not client.wait_for_service(timeout_sec=0.6):
+            return None, "service timeout"
+        future = client.call_async(ListControllers.Request())
+        rclpy.spin_until_future_complete(self._moveit_node, future, timeout_sec=1.0)
+        if not future.done() or future.result() is None:
+            return None, "service sin respuesta"
+        return future.result(), None
+
+    def _wait_for_controllers_ready(self, timeout_sec: float) -> Tuple[bool, str]:
+        deadline = time.monotonic() + max(0.1, timeout_sec)
+        last_reason = "controllers no listos"
+        while time.monotonic() < deadline:
+            ok, reason = self._controllers_ready()
+            last_reason = reason
+            if ok:
+                return True, reason
+            time.sleep(0.15)
+        return False, last_reason
 
     @pyqtSlot(int)
     def _schedule_camera_health_check(self, delay_ms: int = 1800) -> None:
@@ -1952,41 +2389,21 @@ class ControlPanelV2(QMainWindow):
                     f"ready={self._camera_stream_ok} last_age={last_age:.2f}s"
                 )
                 if not self._camera_stream_ok:
-                    if self._camera_frame_count == 0 and last_age < 2.0:
-                        QMetaObject.invokeMethod(
-                            self,
-                            "_set_status_async",
-                            Qt.QueuedConnection,
-                            Q_ARG(str, "Cámara esperando frames…"),
-                            Q_ARG(bool, False),
-                        )
+                    in_init_grace = False
+                    if self._camera_initializing and self._camera_init_start:
+                        in_init_grace = (now - self._camera_init_start) < CAMERA_INIT_GRACE_SEC
+                    elif self._bridge_start_ts:
+                        in_init_grace = (now - self._bridge_start_ts) < CAMERA_INIT_GRACE_SEC
+                    if in_init_grace or (self._camera_frame_count == 0 and last_age < 2.0):
+                        self.signal_status.emit("Cámara esperando frames…", False)
                     else:
-                        QMetaObject.invokeMethod(
-                            self,
-                            "_set_status_async",
-                            Qt.QueuedConnection,
-                            Q_ARG(str, "Cámara no publica; calibración bloqueada"),
-                            Q_ARG(bool, True),
-                        )
-                    QMetaObject.invokeMethod(
-                        self,
-                        "_schedule_camera_health_check",
-                        Qt.QueuedConnection,
-                        Q_ARG(int, 2000),
-                    )
+                        self.signal_status.emit("Cámara no publica; calibración bloqueada", True)
+                    self.signal_schedule_camera_health_check.emit(2000)
                 elif self._objects_settled and not self._calibration_ready:
-                    QMetaObject.invokeMethod(
-                        self,
-                        "_ensure_calibration_ready",
-                        Qt.QueuedConnection,
-                    )
+                    self.signal_calibration_check.emit()
             finally:
                 self._camera_topic_check_inflight = False
-                QMetaObject.invokeMethod(
-                    self,
-                    "_refresh_controls",
-                    Qt.QueuedConnection,
-                )
+                self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
     
@@ -2004,9 +2421,6 @@ class ControlPanelV2(QMainWindow):
     
     @pyqtSlot()
     def _connect_camera(self):
-        if threading.current_thread() is not threading.main_thread():
-            QMetaObject.invokeMethod(self, "_connect_camera", Qt.QueuedConnection)
-            return
         self._log_button("Conectar cámara")
         if not self._bridge_running:
             self._log_error("Bridge no activo; cámara bloqueada")
@@ -2053,12 +2467,7 @@ class ControlPanelV2(QMainWindow):
         self._camera_subscribed = True
         self._set_status(f"Suscrito a {topic}", error=False)
         self._log(f"[CAMERA] Suscripción OK a {topic}")
-        QMetaObject.invokeMethod(
-            self,
-            "_start_camera_health_check",
-            Qt.QueuedConnection,
-            Q_ARG(int, 1200),
-        )
+        self._start_camera_health_check(1200)
         return True
 
     @pyqtSlot(int)
@@ -2121,7 +2530,7 @@ class ControlPanelV2(QMainWindow):
             QTimer.singleShot(1500, self._auto_connect_camera)
             return
         self._log("[CAMERA] Auto-conectando cámara...")
-        QMetaObject.invokeMethod(self, "_connect_camera", Qt.QueuedConnection)
+        self.signal_connect_camera.emit()
         if not self._camera_subscribed:
             QTimer.singleShot(1500, self._auto_connect_camera)
 
@@ -2143,32 +2552,36 @@ class ControlPanelV2(QMainWindow):
         if self._joint_subscribed:
             return
         try:
-            self.ros_worker.subscribe_joint_states(self.joint_topic)
-            self._joint_subscribed = True
-            self.lbl_joint_states.setText(f"Joint states: suscrito {self.joint_topic}")
-            if hasattr(self, "joint_timer") and self.joint_timer.isActive():
+            topic, found = self._discover_joint_states_topic(self.joint_topic)
+            self.joint_topic = topic
+            if topic and topic != self._joint_current_topic:
+                self.ros_worker.subscribe_joint_states(topic)
+                self._joint_current_topic = topic
+            if found:
+                self.lbl_joint_states.setText(f"Joint states: suscrito {topic}")
+            if self._last_joint_stamp:
+                self._joint_active = True
+            if self._joint_active and hasattr(self, "joint_timer") and self.joint_timer.isActive():
+                self._joint_subscribed = True
                 self.joint_timer.stop()
         except Exception as exc:
             self._log_warning(f"No se pudo suscribir a joint_states: {exc}")
 
-    def _ensure_calibration_ready(self):
-        if self._calibration_ready:
-            return
-        if not self._objects_settled:
-            self._log_calib_blocked("esperando caída/estabilidad de objetos")
-            return
-        if not self._pose_info_ready:
-            self._log_calib_blocked("pose/info no disponible")
-            return
-        if not self._camera_stream_ok:
-            self._log_calib_blocked("cámara no publica")
-            return
-        self._log("[CALIB] Inicializando calibración tras bridge")
-        self._load_table_calibration()
-        self._refresh_objects_from_gz_async()
-        QTimer.singleShot(1500, self._refresh_objects_from_gz_async)
-        QTimer.singleShot(4000, self._refresh_objects_from_gz_async)
-        self._calibration_ready = True
+    def _discover_joint_states_topic(self, preferred: str) -> Tuple[str, bool]:
+        topic = (preferred or "").strip() or "/joint_states"
+        if not self.ros_worker.node_ready():
+            return topic, False
+        try:
+            topics = self.ros_worker.list_topic_names()
+        except Exception:
+            return topic, False
+        if topic in topics and self.ros_worker.topic_has_publishers(topic):
+            return topic, True
+        # fallback: cualquier tópico que termine en /joint_states
+        for candidate in sorted(t for t in topics if t.endswith("/joint_states")):
+            if self.ros_worker.topic_has_publishers(candidate):
+                return candidate, True
+        return topic, False
 
     @pyqtSlot()
     def _on_bridge_ready(self):
@@ -2180,7 +2593,7 @@ class ControlPanelV2(QMainWindow):
         QTimer.singleShot(300, self._refresh_camera_topics)
         QTimer.singleShot(600, self._auto_connect_camera)
         self._check_camera_topic_health()
-        self._ensure_calibration_ready()
+        self.signal_calibration_check.emit()
         try:
             if self._gz_running:
                 self._refresh_objects_from_gz_async()
@@ -2249,6 +2662,9 @@ class ControlPanelV2(QMainWindow):
     def _on_joint_state(self, payload: Dict[str, object]):
         if not payload:
             return
+        topic = payload.get("topic") or ""
+        if topic:
+            self._joint_current_topic = topic
 
         names = payload.get("name") or []
         pos_list = payload.get("position") or []
@@ -2259,6 +2675,7 @@ class ControlPanelV2(QMainWindow):
         if stamp:
             self._last_joint_stamp = stamp
         now = stamp or time.time()
+        self._joint_active = True
 
         norm_names = [_normalize_joint_name(n) for n in names]
         pos_map: Dict[str, float] = {}
@@ -2470,17 +2887,17 @@ class ControlPanelV2(QMainWindow):
             return
 
         def worker():
-            self._set_status(f"Ejecutando {label}…")
+            self._ui_set_status(f"Ejecutando {label}…")
             try:
                 res = subprocess.run(["bash", path], capture_output=True, text=True, timeout=180)
                 if res.returncode == 0:
-                    self._set_status(f"OK {label}")
+                    self._ui_set_status(f"OK {label}")
                 else:
-                    self._set_status(f"Fallo {label} (rc={res.returncode})", error=True)
+                    self._ui_set_status(f"Fallo {label} (rc={res.returncode})", error=True)
             except subprocess.TimeoutExpired:
-                self._set_status(f"Timeout {label}", error=True)
+                self._ui_set_status(f"Timeout {label}", error=True)
             except Exception as exc:
-                self._set_status(f"Error {label}: {exc}", error=True)
+                self._ui_set_status(f"Error {label}: {exc}", error=True)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2560,12 +2977,12 @@ class ControlPanelV2(QMainWindow):
                 self._invalidate_settle("gazebo start", restart=True)
                 self._pose_info_ready = False
                 self._ensure_pose_subscription()
-                self._set_status("Gazebo lanzado")
-                set_led(self.led_gz, "on")
-                QMetaObject.invokeMethod(self, "_request_auto_bridge_start", Qt.QueuedConnection)
+                self._ui_set_status("Gazebo lanzado")
+                self.signal_set_led.emit(self.led_gz, "on")
+                self.signal_request_auto_bridge_start.emit()
             except Exception as exc:
-                self._set_status(f"Error lanzando Gazebo: {exc}", error=True)
-                set_led(self.led_gz, "error")
+                self._ui_set_status(f"Error lanzando Gazebo: {exc}", error=True)
+                self.signal_set_led.emit(self.led_gz, "error")
 
         threading.Thread(target=worker, daemon=True).start()
         # Programar ajuste automático de joint2 tras bridge (no en arranque de Gazebo)
@@ -2707,7 +3124,7 @@ class ControlPanelV2(QMainWindow):
         self._print_pose_snapshot()
         self._pose_debug_timer = QTimer(self)
         self._pose_debug_timer.timeout.connect(self._print_pose_snapshot)
-        self._pose_debug_timer.start(1000)
+        self._pose_debug_timer.start(int(DEBUG_POSES_PERIOD_SEC * 1000))
         self._log("[DEBUG] Iniciado - snapshots de poses")
         self._apply_debug_button_style(self.btn_debug_joints, True)
 
@@ -2800,18 +3217,18 @@ class ControlPanelV2(QMainWindow):
         self._detach_inflight = True
         self._detach_attempted = True
         self._log_button("Soltar objetos")
-        self._set_status("Soltando objetos…")
+        self._ui_set_status("Soltando objetos…")
 
         def worker():
             try:
                 if not ROS_AVAILABLE or self._moveit_node is None:
                     self._log_error("ROS no disponible; no se pudo soltar objetos")
-                    self._set_status("Servicio objetos no accesible", error=True)
+                    self._ui_set_status("Servicio objetos no accesible", error=True)
                     return
                 client = self._moveit_node.create_client(Trigger, "release_objects")
                 if not client.wait_for_service(timeout_sec=0.8):
                     self._log_error("Servicio release_objects no disponible")
-                    self._set_status("Servicio release_objects no disponible", error=True)
+                    self._ui_set_status("Servicio release_objects no disponible", error=True)
                     return
                 attempts = 5
                 backoff = 0.3
@@ -2829,18 +3246,18 @@ class ControlPanelV2(QMainWindow):
                     time.sleep(backoff)
                 if not success:
                     self._emit_log(f"[PHYSICS][DETACH] FAILED after {attempts} attempts (non-blocking)")
-                    self._set_status("⚠ Detach no confirmado", error=True)
+                    self._ui_set_status("⚠ Detach no confirmado", error=True)
                     self._detach_backoff_until = time.time() + 30.0
                     self._detach_auto_disabled = True
                     return
                 self._objects_release_done = True
                 self._objects_settled = False
-                self._refresh_controls()
-                self._set_status("✅ Objetos soltados")
+                self.signal_refresh_controls.emit()
+                self._ui_set_status("✅ Objetos soltados")
                 self._invalidate_settle("objetos liberados", restart=True)
             except Exception as e:
                 self._log_error(f"Soltar objetos error: {e}")
-                self._set_status(f"Error soltando objetos: {e}", error=True)
+                self._ui_set_status(f"Error soltando objetos: {e}", error=True)
             finally:
                 self._detach_inflight = False
 
@@ -2864,6 +3281,34 @@ class ControlPanelV2(QMainWindow):
         except Exception as exc:
             self._log_error(f"Error iniciando release_objects_service: {exc}")
 
+    def _start_world_tf_publisher(self, world_name: str) -> None:
+        if self.world_tf_proc is not None and self.world_tf_proc.poll() is None:
+            return
+        try:
+            ensure_dir(LOG_DIR)
+            tf_log = os.path.join(LOG_DIR, "world_tf_publisher.log")
+            rotate_log(tf_log)
+            cmd_core = with_line_buffer(
+                "ros2 run ur5_tools world_tf_publisher "
+                f"--ros-args -p world_name:={shlex.quote(world_name)} "
+                f"-p model_name:={shlex.quote(UR5_MODEL_NAME)} "
+                "-p base_frame:=base_link -p world_frame:=world"
+            )
+            cmd = bash_preamble(self.ws_dir) + f"{cmd_core} > '{tf_log}' 2>&1"
+            self.world_tf_proc = subprocess.Popen(
+                ["bash", "-lc", cmd],
+                preexec_fn=os.setsid,
+            )
+            self._started_world_tf = True
+            self._emit_log("[TF] world_tf_publisher lanzado")
+        except Exception as exc:
+            self._log_error(f"[TF] Error iniciando world_tf_publisher: {exc}")
+
+    def _stop_world_tf_publisher(self) -> None:
+        self._kill_proc(self.world_tf_proc, "world_tf_publisher")
+        self.world_tf_proc = None
+        self._started_world_tf = False
+
     def _stop_gazebo(self):
         self._log_button("Stop Gazebo")
         self._set_status("Deteniendo Gazebo…")
@@ -2872,11 +3317,16 @@ class ControlPanelV2(QMainWindow):
         self.gz_proc = None
         self._kill_proc(self.rsp_proc, "robot_state_publisher")
         self.rsp_proc = None
+        self._stop_world_tf_publisher()
         self._kill_proc(self.release_service_proc, "release_objects_service")
         self.release_service_proc = None
         self._objects_settled = False
         self._objects_seen_fall = False
         self._objects_release_done = False
+        self._trace_ready = False
+        self._tf_ready_state = False
+        self._controllers_ok = False
+        self._controllers_reason = "gazebo detenido"
         self._detach_inflight = False
         self._detach_attempted = False
         self._detach_auto_disabled = False
@@ -2946,6 +3396,7 @@ class ControlPanelV2(QMainWindow):
         # Deshabilitar botón mientras arranca para que se vea en gris como Gazebo
         self._bridge_running = True
         self._started_bridge = True
+        self._bridge_start_ts = time.time()
         self._refresh_controls()
 
         def worker():
@@ -2969,32 +3420,37 @@ class ControlPanelV2(QMainWindow):
                     ["bash", "-lc", cmd],
                     preexec_fn=os.setsid,
                 )
-                self._set_status("Bridge lanzado")
+                self._ui_set_status("Bridge lanzado")
                 if not self._debug_logs_enabled:
                     self._emit_log("[INFO] Bridge lanzado")
-                set_led(self.led_bridge, "on")
+                self.signal_set_led.emit(self.led_bridge, "on")
                 self._bridge_running = True
-                self._refresh_controls()
+                self.signal_refresh_controls.emit()
+                self._start_world_tf_publisher(world_name)
                 self._spawn_controllers_async()
-                QMetaObject.invokeMethod(
-                    self, "_on_bridge_ready", Qt.QueuedConnection
-                )
+                self.signal_bridge_ready.emit()
             except Exception as exc:
-                self._set_status(f"Error lanzando bridge: {exc}", error=True)
-                set_led(self.led_bridge, "error")
+                self._ui_set_status(f"Error lanzando bridge: {exc}", error=True)
+                self.signal_set_led.emit(self.led_bridge, "error")
                 self._bridge_running = False
-                self._refresh_controls()
+                self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _spawn_controllers_async(self):
         def worker():
+            if self._controller_spawn_done and self._controllers_ok:
+                return
+            if self._controller_spawn_inflight:
+                return
+            self._controller_spawn_inflight = True
             for _ in range(20):
                 if self._ros2_control_available():
                     break
                 time.sleep(0.25)
             if not self._ros2_control_available():
-                self._emit_log("[CTRL] controller_manager no disponible; no se pueden spawnear controladores")
+                self._log_error("controller_manager no disponible; no se pueden spawnear controladores")
+                self._controller_spawn_inflight = False
                 return
             clock_ok = False
             deadline = time.monotonic() + 30.0
@@ -3005,44 +3461,75 @@ class ControlPanelV2(QMainWindow):
                     break
                 time.sleep(0.25)
             if not clock_ok:
-                self._emit_log("[CTRL] /clock no disponible; abortando spawners")
+                self._log_error("/clock no disponible; abortando spawners")
+                self._controller_spawn_inflight = False
                 return
-            self._emit_log("[CTRL] Spawneando controladores ros2_control…")
-            cmds = [
-                [
-                    "ros2", "run", "controller_manager", "spawner",
-                    "joint_state_broadcaster",
-                    "-c", "/controller_manager",
-                    "--controller-manager-timeout", "30",
-                    "--switch-timeout", "30",
-                ],
-                [
-                    "ros2", "run", "controller_manager", "spawner",
-                    "joint_trajectory_controller",
-                    "-c", "/controller_manager",
-                    "--controller-manager-timeout", "30",
-                    "--switch-timeout", "30",
-                ],
-                [
-                    "ros2", "run", "controller_manager", "spawner",
-                    "gripper_controller",
-                    "-c", "/controller_manager",
-                    "--controller-manager-timeout", "30",
-                    "--switch-timeout", "30",
-                ],
-            ]
+            cm_path = self._controller_manager_path() or "/controller_manager"
+            list_srv = f"{cm_path}/list_controllers"
+            resp, err = self._list_controllers(list_srv)
+            if resp is None:
+                self._log_error(f"list_controllers falló: {err or 'sin respuesta'}")
+                self._controller_spawn_inflight = False
+                return
+            state_map = {c.name: c.state for c in resp.controller}
+            controllers = ["joint_state_broadcaster", "joint_trajectory_controller"]
+            if gripper_controller_defined():
+                controllers.append("gripper_controller")
+            else:
+                self._emit_log("[CTRL] gripper_controller no definido; omitido.")
+
+            to_spawn = []
+            to_activate = []
+            for name in controllers:
+                state = state_map.get(name)
+                if state is None:
+                    to_spawn.append(name)
+                    continue
+                kind = self._controller_state_kind(state)
+                if kind == "ACTIVE":
+                    continue
+                if kind == "INACTIVE":
+                    to_activate.append(name)
+                elif kind == "LOADED":
+                    to_activate.append(name)
+                else:
+                    self._log_warning(f"[CTRL] Estado desconocido para {name}: {state}")
+
+            if not to_spawn and not to_activate:
+                self._emit_log("[CTRL] Controladores ya activos; no se requiere spawner.")
+                self._controller_spawn_inflight = False
+                self._controller_spawn_done = True
+                return
+
+            self._emit_log("[CTRL] Preparando controladores ros2_control…")
             env = os.environ.copy()
-            for cmd in cmds:
-                for attempt in range(3):
-                    try:
-                        res = subprocess.run(cmd, timeout=40, env=env)
-                        if res.returncode == 0:
-                            break
-                        self._emit_log(f"[CTRL] WARN spawner rc={res.returncode}: {' '.join(cmd)}")
-                    except Exception as exc:
-                        self._emit_log(f"[CTRL] ERROR spawner: {exc}")
-                    time.sleep(2.0)
-            self._emit_log("[CTRL] Spawners finalizados")
+            for name in to_spawn:
+                cmd = [
+                    "ros2", "run", "controller_manager", "spawner",
+                    name,
+                    "-c", cm_path,
+                    "--controller-manager-timeout", "30",
+                    "--switch-timeout", "30",
+                ]
+                try:
+                    res = subprocess.run(cmd, timeout=40, env=env)
+                    if res.returncode != 0:
+                        self._log_error(f"Spawner falló rc={res.returncode}: {' '.join(cmd)}")
+                except Exception as exc:
+                    self._log_error(f"Spawner error: {exc}")
+
+            for name in to_activate:
+                cmd = ["ros2", "control", "set_controller_state", name, "active"]
+                try:
+                    res = subprocess.run(cmd, timeout=20, env=env)
+                    if res.returncode != 0:
+                        self._log_error(f"Activación falló rc={res.returncode}: {' '.join(cmd)}")
+                except Exception as exc:
+                    self._log_error(f"Activación error: {exc}")
+
+            self._emit_log("[CTRL] Preparación de controladores finalizada.")
+            self._controller_spawn_inflight = False
+            self._controller_spawn_done = True
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3053,9 +3540,11 @@ class ControlPanelV2(QMainWindow):
         self._set_status("Deteniendo bridge…")
         self._kill_proc(self.bridge_proc, "parameter_bridge")
         self._kill_proc(self.rsp_proc, "robot_state_publisher")
+        self._stop_world_tf_publisher()
         self.rsp_proc = None
         self._kill_proc(self.release_service_proc, "release_objects_service")
         self._trace_ready = False
+        self._tf_ready_state = False
         self._reset_trace_throttle("bridge stop")
         if self._tf_ready_timer:
             self._tf_ready_timer.stop()
@@ -3069,17 +3558,31 @@ class ControlPanelV2(QMainWindow):
             "pkill -f 'ros_gz_bridge' || true; pkill -f parameter_bridge || true",
         ], check=False)
         self._bridge_running = False
+        self._bridge_start_ts = 0.0
         set_led(self.led_bridge, "off")
         self._refresh_controls()
         self._bridge_ready = False
+        self._controllers_ok = False
+        self._controllers_reason = "bridge detenido"
+        self._controller_spawn_inflight = False
+        self._controller_spawn_done = False
         self._objects_release_done = False
         self._pose_info_ready = False
 
     def _start_moveit(self):
+        if not self._ros_worker_started:
+            self._ensure_ros_worker_started()
+        if self._moveit_ready():
+            self.signal_moveit_state.emit("READY", "move_group ya activo")
+            self._set_status("MoveIt ya activo")
+            return
         if self.moveit_proc is not None and self.moveit_proc.poll() is None:
+            self.signal_moveit_state.emit("WAITING_MOVEIT_READY", "move_group arrancado; esperando disponibilidad")
+            threading.Thread(target=self._wait_for_moveit_ready, daemon=True).start()
             return
         self._log_button("Start MoveIt")
         self._set_status("Lanzando MoveIt…")
+        self.signal_moveit_state.emit("STARTING", "launching move_group")
         try:
             ensure_dir(LOG_DIR)
             moveit_log = os.path.join(LOG_DIR, "moveit_bringup.log")
@@ -3096,12 +3599,13 @@ class ControlPanelV2(QMainWindow):
             )
             self._started_moveit = True
             self._moveit_running = True
-            set_led(self.led_moveit, "on")
             self._set_status("MoveIt lanzado")
             self._refresh_controls()
+            self.signal_moveit_state.emit("WAITING_MOVEIT_READY", "esperando move_group")
+            threading.Thread(target=self._wait_for_moveit_ready, daemon=True).start()
         except Exception as exc:
             self._set_status(f"Error lanzando MoveIt: {exc}", error=True)
-            set_led(self.led_moveit, "error")
+            self.signal_moveit_state.emit("ERROR", f"launch failed: {exc}")
             self._moveit_running = False
 
     def _stop_moveit(self):
@@ -3114,14 +3618,40 @@ class ControlPanelV2(QMainWindow):
             check=False,
         )
         self._moveit_running = False
-        set_led(self.led_moveit, "off")
+        self.signal_moveit_state.emit("OFF", "manual")
         self._refresh_controls()
+
+    def _wait_for_moveit_ready(self):
+        """Esperar a que move_group esté listo (action server + topics)."""
+        deadline = time.monotonic() + max(2.0, MOVEIT_READY_TIMEOUT_SEC)
+        while time.monotonic() < deadline:
+            if self._closing:
+                return
+            if self.moveit_proc is None or self.moveit_proc.poll() is not None:
+                try:
+                    self.signal_moveit_state.emit("ERROR", "move_group terminó")
+                except RuntimeError:
+                    return
+                return
+            if not self._ros_worker_started:
+                self._ensure_ros_worker_started()
+            if self._moveit_ready():
+                try:
+                    self.signal_moveit_state.emit("READY", "move_group activo")
+                except RuntimeError:
+                    return
+                return
+            time.sleep(0.5)
+        try:
+            self.signal_moveit_state.emit("WAITING_MOVEIT_READY", "timeout esperando move_group")
+        except RuntimeError:
+            return
 
     def _start_moveit_bridge(self):
         if self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None:
             return
         self._log_button("Start MoveIt bridge")
-        if not self._moveit_running:
+        if self._moveit_state != MoveItState.READY:
             self._log_warning("MoveIt no está activo; el bridge puede fallar")
         try:
             ensure_dir(LOG_DIR)
@@ -3236,11 +3766,13 @@ class ControlPanelV2(QMainWindow):
                 ], preexec_fn=os.setsid)
                 self._bag_running = True
                 self._started_bag = True
-                self._set_status(f"Bag grabando → {outdir}")
-                set_led(self.led_bag, "on")
+                self._ui_set_status(f"Bag grabando → {outdir}")
+                self.signal_set_led.emit(self.led_bag, "on")
+                self.signal_refresh_controls.emit()
             except Exception as exc:
-                self._set_status(f"Error al grabar bag: {exc}", error=True)
-                set_led(self.led_bag, "error")
+                self._ui_set_status(f"Error al grabar bag: {exc}", error=True)
+                self.signal_set_led.emit(self.led_bag, "error")
+                self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3260,7 +3792,7 @@ class ControlPanelV2(QMainWindow):
         clock_ok, _ = self._clock_status()
         bag_ok = self._rosbag_running()
         ctrl_ok = self._ros2_control_available()
-        moveit_ok = self.moveit_proc is not None and self.moveit_proc.poll() is None
+        moveit_ok = self._moveit_ready()
         moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
         self._apply_status(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
 
@@ -3275,8 +3807,8 @@ class ControlPanelV2(QMainWindow):
             br_ok = self._bridge_running
             bag_ok = self._bag_running
             clock_ok = gz_ok  # /clock depende de Gazebo lanzado desde aquí
-            ctrl_ok = gz_ok   # ros2_control se asume cuando Gazebo está arriba
-            moveit_ok = self.moveit_proc is not None and self.moveit_proc.poll() is None
+            ctrl_ok = self._controllers_ok if self._bridge_running else False
+            moveit_ok = self._moveit_ready()
             moveit_bridge_ok = self.moveit_bridge_proc is not None and self.moveit_bridge_proc.poll() is None
             # [REMOVED REPETITIVE STATUS LOG] - solo loguea si hay cambios en el estado
             self.status_updated.emit(gz_ok, br_ok, clock_ok, bag_ok, ctrl_ok, moveit_ok, moveit_bridge_ok)
@@ -3300,13 +3832,35 @@ class ControlPanelV2(QMainWindow):
         set_led(self.led_bag, "on" if bag_ok else "off")
         set_led(self.led_ros2, "on" if ctrl_ok else "off")
         set_led(self.led_ur5, "on" if gz_ok else "off")
-        set_led(self.led_moveit, "on" if moveit_ok else "off")
+        if self._moveit_state == MoveItState.STARTING:
+            set_led(self.led_moveit, "warn")
+        elif self._moveit_state == MoveItState.WAITING_MOVEIT_READY:
+            set_led(self.led_moveit, "warn")
+        elif self._moveit_state == MoveItState.READY:
+            set_led(self.led_moveit, "on")
+        elif self._moveit_state == MoveItState.ERROR:
+            set_led(self.led_moveit, "error")
+        else:
+            set_led(self.led_moveit, "off")
         set_led(self.led_moveit_bridge, "on" if moveit_bridge_ok else "off")
         self._gz_running = gz_ok
         self._bridge_running = br_ok
         self._bag_running = bag_ok
         self._moveit_running = moveit_ok
         self._moveit_bridge_running = moveit_bridge_ok
+        if self._moveit_state == MoveItState.OFF and moveit_ok:
+            self._moveit_state = MoveItState.READY
+            self._moveit_state_reason = "move_group detectado"
+            set_led(self.led_moveit, "on")
+        if self._moveit_state == MoveItState.READY and not moveit_ok:
+            self._moveit_state = MoveItState.WAITING_MOVEIT_READY
+            self._moveit_state_reason = "move_group no responde"
+            set_led(self.led_moveit, "warn")
+        if self._moveit_state in (MoveItState.STARTING, MoveItState.WAITING_MOVEIT_READY) and moveit_ok:
+            self._moveit_state = MoveItState.READY
+            self._moveit_state_reason = "move_group listo"
+            set_led(self.led_moveit, "on")
+        self._update_moveit_status_label()
         summary = []
         summary.append(f"GZ:{'on' if gz_ok else 'off'}")
         summary.append(f"BR:{'on' if br_ok else 'off'}")
@@ -3318,6 +3872,79 @@ class ControlPanelV2(QMainWindow):
         self.status_lbl.setText(" · ".join(summary))
         self._update_system_stats()
         self._refresh_controls()
+
+    def _moveit_topics_ready(self) -> bool:
+        if not self.ros_worker or not self.ros_worker.node_ready():
+            return False
+        return (
+            self.ros_worker.topic_has_publishers("/move_group/status")
+            or self.ros_worker.topic_has_publishers("/planning_scene")
+        )
+
+    def _moveit_status_ready(self) -> bool:
+        if not self.ros_worker or not self.ros_worker.node_ready():
+            return False
+        if self._moveit_topics_ready():
+            return True
+        return self.ros_worker.has_service("/move_group/get_planning_scene")
+
+    def _moveit_action_ready(self) -> bool:
+        if ActionClient is None or MoveGroup is None:
+            return False
+        if self._moveit_node is None:
+            try:
+                self._init_moveit_publisher()
+            except Exception:
+                return False
+        if self._moveit_node is None:
+            return False
+        if self._moveit_action_client is None:
+            try:
+                self._moveit_action_client = ActionClient(self._moveit_node, MoveGroup, "/move_group")
+            except Exception:
+                return False
+        try:
+            return self._moveit_action_client.wait_for_server(timeout_sec=0.2)
+        except Exception:
+            return False
+
+    def _follow_joint_traj_ready(self) -> bool:
+        if not ROS_AVAILABLE or ActionClient is None or FollowJointTrajectory is None:
+            return False
+        if self._moveit_node is None:
+            return False
+        traj_topic = self._select_traj_topic()
+        action_name = self._traj_action_target(traj_topic) or "/joint_trajectory_controller/follow_joint_trajectory"
+        if not action_name:
+            return False
+        if self._traj_action_client is None or self._traj_action_name != action_name:
+            try:
+                self._traj_action_client = ActionClient(self._moveit_node, FollowJointTrajectory, action_name)
+                self._traj_action_name = action_name
+            except Exception:
+                self._traj_action_client = None
+                self._traj_action_name = ""
+                return False
+        client = self._traj_action_client
+        if client is None:
+            return False
+        try:
+            return client.wait_for_server(timeout_sec=0.2)
+        except Exception:
+            return False
+
+    def _moveit_ready(self) -> bool:
+        return self._moveit_action_ready() and self._moveit_status_ready() and self._follow_joint_traj_ready()
+
+    def _update_moveit_status_label(self) -> None:
+        if self.lbl_moveit_status is not None:
+            state_label = self._moveit_state.value
+            self.lbl_moveit_status.setText(f"MoveIt ({state_label})")
+            reason = self._moveit_state_reason or state_label
+            self.lbl_moveit_status.setToolTip(f"{state_label}: {reason}")
+        if self.lbl_moveit_bridge_status is not None:
+            bridge_label = "ON" if self._moveit_bridge_running else "OFF"
+            self.lbl_moveit_bridge_status.setText(f"MoveIt bridge ({bridge_label})")
 
     def _update_system_stats(self):
         """Actualizar labels de CPU/RAM/Load, tolerando ausencia de psutil."""
@@ -3446,6 +4073,12 @@ class ControlPanelV2(QMainWindow):
     def _refresh_controls(self):
         if self._closing:
             return
+        if self._external_state_active():
+            self._apply_external_system_state()
+        else:
+            self._evaluate_system_state()
+        system_ready = self._system_state == SystemState.READY
+        system_error = self._system_state == SystemState.ERROR
         self.btn_gz_start.setEnabled(not self._gz_running)
         self.btn_gz_stop.setEnabled(self._gz_running)
         self.btn_debug_joints.setEnabled(self._gz_running)
@@ -3463,9 +4096,10 @@ class ControlPanelV2(QMainWindow):
         self.btn_bag_start.setEnabled(bag_enabled and not self._bag_running)
         self.btn_bag_stop.setEnabled(bag_enabled and self._bag_running)
         # MoveIt controls
-        self.btn_moveit_start.setEnabled(not self._moveit_running)
-        self.btn_moveit_stop.setEnabled(self._moveit_running)
-        moveit_bridge_enabled = self._moveit_running
+        moveit_running = self._moveit_state != MoveItState.OFF
+        self.btn_moveit_start.setEnabled(not moveit_running)
+        self.btn_moveit_stop.setEnabled(moveit_running)
+        moveit_bridge_enabled = self._moveit_state == MoveItState.READY
         self.btn_moveit_bridge_start.setEnabled(moveit_bridge_enabled and not self._moveit_bridge_running)
         self.btn_moveit_bridge_stop.setEnabled(moveit_bridge_enabled and self._moveit_bridge_running)
         
@@ -3476,11 +4110,16 @@ class ControlPanelV2(QMainWindow):
         self.btn_camera_refresh.setEnabled(camera_enabled)
         self.btn_camera_connect.setEnabled(camera_enabled)
         self.btn_calibrate.setEnabled(
-            camera_enabled and self._objects_settled and self._camera_stream_ok and self._pose_info_ready
+            camera_enabled
+            and not system_error
+            and self._objects_settled
+            and self._camera_stream_ok
+            and self._pose_info_ready
+            and self._tf_ready_state
         )
         
         # Control manual: habilitado cuando el bridge está activo
-        manual_enabled = self._bridge_running and not self._script_motion_active
+        manual_enabled = system_ready and self._controllers_ok and not self._script_motion_active
         self.btn_send_joints.setEnabled(manual_enabled)
         self.joint_time.setEnabled(manual_enabled)
         self.chk_auto_joints.setEnabled(manual_enabled)
@@ -3488,22 +4127,19 @@ class ControlPanelV2(QMainWindow):
             slider.setEnabled(manual_enabled)
 
         # Botones de movimiento: solo con bridge activo
-        motion_enabled = self._bridge_running and not self._script_motion_active
+        motion_enabled = system_ready and self._controllers_ok and not self._script_motion_active
         self.btn_home.setEnabled(motion_enabled)
         self.btn_table.setEnabled(motion_enabled)
         self.btn_basket.setEnabled(motion_enabled)
         self.btn_gripper.setEnabled(motion_enabled)
         self._schedule_controller_check()
-        pick_enabled = (
-            motion_enabled
-            and self._controllers_ok
-            and self._tf_ready_state
-            and self._pose_info_ready
-            and bool(self._ee_frame_effective)
-        )
+        moveit_ready = self._moveit_state == MoveItState.READY
+        pick_enabled = system_ready and motion_enabled and bool(self._ee_frame_effective) and moveit_ready
         self.btn_pick_demo.setEnabled(pick_enabled)
-        if motion_enabled and self._controllers_ok and not pick_enabled:
+        if system_ready and motion_enabled and self._controllers_ok and not pick_enabled:
             reason = "TF world->base_link no disponible"
+            if not moveit_ready:
+                reason = "MoveIt no listo"
             if not self._pose_info_ready:
                 reason = "pose/info no disponible"
             if not self._ee_frame_effective:
@@ -3535,10 +4171,12 @@ class ControlPanelV2(QMainWindow):
             self._controllers_reason = reason
             self._last_controller_check = time.time()
             self._controller_check_inflight = False
-            self._emit_log(f"[CTRL] controllers_ready={str(ok).lower()} detail={reason}")
-            if changed and not ok:
-                self._log(f"[PICK] controladores no listos ({reason})")
-            QTimer.singleShot(0, self._refresh_controls)
+            if changed:
+                self._emit_log(f"[CTRL] controllers_ready={str(ok).lower()} detail={reason}")
+                if not ok:
+                    self._log_warning(f"[PICK] controladores no listos ({reason})")
+            self.signal_controllers_ready.emit(ok)
+            self.signal_refresh_controls.emit()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3626,19 +4264,20 @@ class ControlPanelV2(QMainWindow):
         """Mover a HOME ajustando joint2 un -20% (sentido negativo) al lanzar Gazebo."""
         if self._auto_joint2_move_done:
             return
+        self._schedule_controller_check()
         if not self._bridge_running:
             if retries > 0:
-                QTimer.singleShot(1500, lambda: self._apply_home_joint2_offset(retries=retries - 1))
+                self._schedule_home_offset_retry(1500, retries - 1)
             return
         if not self._gz_running:
             if retries > 0:
-                QTimer.singleShot(1500, lambda: self._apply_home_joint2_offset(retries=retries - 1))
+                self._schedule_home_offset_retry(1500, retries - 1)
             return
 
-        if not self._ros2_control_available():
+        if not self._controllers_ok:
             if retries > 0:
                 self._log("[AUTO] Controller manager no listo, reintentando en 2s")
-                QTimer.singleShot(2000, lambda: self._apply_home_joint2_offset(retries=retries - 1))
+                self._schedule_home_offset_retry(2000, retries - 1)
             else:
                 self._log_warning("[AUTO] Controller manager no disponible (ajuste automático cancelado)")
             return
@@ -3660,13 +4299,17 @@ class ControlPanelV2(QMainWindow):
             ok, info = self._publish_joint_trajectory(target, 3.0)
             if ok:
                 self._auto_joint2_move_done = True
-                self._set_status("AUTO: joint2 ajustado (-20% HOME)")
+                self._ui_set_status("AUTO: joint2 ajustado (-20% HOME)")
             else:
                 self._log_warning(f"[AUTO] Falló mover joint2 (-20%): {info}")
                 if retries > 0:
-                    QTimer.singleShot(2000, lambda: self._apply_home_joint2_offset(retries=retries - 1))
+                    self.signal_schedule_home_offset.emit(2000, retries - 1)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    @pyqtSlot(int, int)
+    def _schedule_home_offset_retry(self, delay_ms: int, retries: int) -> None:
+        QTimer.singleShot(delay_ms, lambda: self._apply_home_joint2_offset(retries=retries))
 
     def _go_home(self):
         self._log_button("Go HOME")
@@ -3851,7 +4494,7 @@ class ControlPanelV2(QMainWindow):
         updated = bulk_update_object_positions(updates)
         if updated:
             save_object_positions()
-            QTimer.singleShot(0, self._update_objects)
+            self.signal_update_objects.emit()
             self._log(f"[PICK] Objetos sincronizados desde Gazebo ({updated}).")
         else:
             self._log("[PICK] Objetos: sin cambios desde Gazebo.")
@@ -4110,6 +4753,15 @@ class ControlPanelV2(QMainWindow):
     def _run_pick_demo(self):
         """Publica una secuencia MoveIt-only para el DEMO de mesa → cesta."""
         self._log_button("PICK MESA → CESTA")
+        if self._system_state != SystemState.READY:
+            self._set_status("Sistema no listo; bloqueando pick", error=True)
+            self._emit_log(f"[PICK] Bloqueado: estado={self._system_state.value}")
+            return
+        if self._moveit_state != MoveItState.READY:
+            reason = self._moveit_state_reason or "MoveIt no listo"
+            self._set_status(f"MoveIt no listo; bloqueando pick ({reason})", error=True)
+            self._emit_log(f"[PICK] Bloqueado: MoveIt ({reason})")
+            return
         self._emit_log("[PICK] Secuencia MoveIt-only iniciada")
         ready, reason = self._controllers_ready()
         if not ready:
@@ -4124,6 +4776,8 @@ class ControlPanelV2(QMainWindow):
         def worker():
             try:
                 for label, pose_data, delay in PICK_SEQUENCE:
+                    if self._moveit_state != MoveItState.READY:
+                        raise RuntimeError("MoveIt no listo durante la secuencia")
                     position = pose_data.get("position", (0.0, 0.0, 0.0))
                     frame_id = pose_data.get("frame", BASE_FRAME or "base_link")
                     self._emit_log(
@@ -4131,10 +4785,10 @@ class ControlPanelV2(QMainWindow):
                     )
                     self._publish_moveit_pose(label, pose_data)
                     time.sleep(delay)
-                self._set_status("Pick demo publicado (MoveIt maneja la ejecución)")
+                self._ui_set_status("Pick demo publicado (MoveIt maneja la ejecución)")
                 self._emit_log("[PICK] Secuencia MoveIt publicada correctamente.")
             except Exception as exc:
-                self._set_status(f"Error en pick demo: {exc}", error=True)
+                self._ui_set_status(f"Error en pick demo: {exc}", error=True)
                 self._emit_log(f"[PICK] ✗ Error: {exc}")
             finally:
                 self._set_motion_lock(False)
@@ -4385,32 +5039,64 @@ class ControlPanelV2(QMainWindow):
                 )
             else:
                 self._last_selected_base_pose = None
-            self._log(f"[PICK] TF_DISCOVERY: base={base_frame_label} world={world_frame_label}")
             tf_lookup_status = "ok" if tf_status.get("ok") else "fail"
-            self._log(
-                f"[PICK] tf_lookup: {tf_lookup_status} "
-                f"world={world_frame_label} base={base_frame_label} err={tf_status.get('error') or 'n/a'}"
-            )
             if tf_status.get("ok"):
-                QTimer.singleShot(0, self._set_trace_ready)
+                self.signal_trace_ready.emit()
             selected_base = tf_status.get("selected_base")
             if selected_base:
                 bx, by, bz = selected_base
-                self._log(
-                    f"[PICK] selected_base=({bx:.3f},{by:.3f},{bz:.3f}) frame={base_frame_label}"
-                )
                 self._last_selected_base_pose = (bx, by, bz, base_frame_label)
             else:
-                self._log(f"[PICK] selected_base=None frame={base_frame_label}")
                 self._last_selected_base_pose = None
             transform = tf_status.get("transform")
+            log_sig_parts = [
+                "ok" if tf_status.get("ok") else "fail",
+                base_frame_label,
+                world_frame_label,
+            ]
+            if selected_base:
+                log_sig_parts.append(
+                    f"sel={selected_base[0]:.3f},{selected_base[1]:.3f},{selected_base[2]:.3f}"
+                )
             if transform:
                 t = transform.transform.translation
                 yaw_deg = math.degrees(yaw_from_quaternion(transform.transform.rotation))
+                log_sig_parts.append(f"t={t.x:.3f},{t.y:.3f},{t.z:.3f},{yaw_deg:.2f}")
+            log_signature = "|".join(log_sig_parts)
+            now = time.time()
+            log_pick = True
+            if tf_status.get("ok"):
+                if (
+                    log_signature == self._pick_log_last_sig
+                    and (now - self._pick_log_last_ts) < PICK_LOG_MIN_INTERVAL_SEC
+                ):
+                    log_pick = False
+                else:
+                    self._pick_log_last_sig = log_signature
+                    self._pick_log_last_ts = now
+            else:
+                self._pick_log_last_sig = log_signature
+                self._pick_log_last_ts = now
+            if log_pick or not tf_status.get("ok"):
+                self._log(f"[PICK] TF_DISCOVERY: base={base_frame_label} world={world_frame_label}")
                 self._log(
-                    f"[PICK] tf_world_to_base: translation=({t.x:.3f},{t.y:.3f},{t.z:.3f}) "
-                    f"yaw={yaw_deg:.2f}° frame={base_frame_label}"
+                    f"[PICK] tf_lookup: {tf_lookup_status} "
+                    f"world={world_frame_label} base={base_frame_label} err={tf_status.get('error') or 'n/a'}"
                 )
+                if selected_base:
+                    self._log(
+                        f"[PICK] selected_base=({bx:.3f},{by:.3f},{bz:.3f}) frame={base_frame_label}"
+                    )
+                else:
+                    self._log(f"[PICK] selected_base=None frame={base_frame_label}")
+            if transform:
+                if log_pick or not tf_status.get("ok"):
+                    t = transform.transform.translation
+                    yaw_deg = math.degrees(yaw_from_quaternion(transform.transform.rotation))
+                    self._log(
+                        f"[PICK] tf_world_to_base: translation=({t.x:.3f},{t.y:.3f},{t.z:.3f}) "
+                        f"yaw={yaw_deg:.2f}° frame={base_frame_label}"
+                    )
             tf_topics_list = tf_status.get("tf_topics") or []
             if not tf_topics_list and self._trace_ready:
                 tf_topics_list, _ = _list_tf_topics()
@@ -4418,16 +5104,18 @@ class ControlPanelV2(QMainWindow):
             fallback_reason = tf_status.get("fallback") or "none"
             if self._trace_ready:
                 fallback_reason = "none"
-            self._log(f"[PICK] tf_topics={tf_topics_str} fallback={fallback_reason}")
-            debug_tf, debug_err = debug_dump_tf(world_frame_label, base_frame_label)
-            if debug_tf:
-                tx, ty, tz = debug_tf["translation"]
-                yaw_deg = math.degrees(debug_tf["yaw"])
-                self._log(
-                    f"[PICK] tf_world_to_base: translation=({tx:.3f},{ty:.3f},{tz:.3f}), yaw={yaw_deg:.2f}°"
-                )
-            else:
-                self._log(f"[PICK] tf_world_to_base: error={debug_err or 'unknown'}")
+            if log_pick or not tf_status.get("ok"):
+                self._log(f"[PICK] tf_topics={tf_topics_str} fallback={fallback_reason}")
+                debug_tf, debug_err = debug_dump_tf(world_frame_label, base_frame_label)
+                if debug_tf:
+                    tx, ty, tz = debug_tf["translation"]
+                    yaw_deg = math.degrees(debug_tf["yaw"])
+                    self._log(
+                        f"[PICK] tf_world_to_base: translation=({tx:.3f},{ty:.3f},{tz:.3f}), "
+                        f"yaw={yaw_deg:.2f}°"
+                    )
+                else:
+                    self._log(f"[PICK] tf_world_to_base: error={debug_err or 'unknown'}")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4436,15 +5124,11 @@ class ControlPanelV2(QMainWindow):
             return
         if not self._pose_info_ready:
             self._emit_log("[PICK] Bloqueado: pose/info no disponible")
-            QTimer.singleShot(
-                0, lambda: self._set_status("PICK bloqueado: pose/info no disponible", error=True)
-            )
+            self._ui_set_status("PICK bloqueado: pose/info no disponible", error=True)
             return
         if not self._tf_ready_state:
             self._emit_log("[PICK] Bloqueado: TF world->base_link no disponible")
-            QTimer.singleShot(
-                0, lambda: self._set_status("PICK bloqueado: TF world->base_link no disponible", error=True)
-            )
+            self._ui_set_status("PICK bloqueado: TF world->base_link no disponible", error=True)
             return
         self._pick_tf_inflight = True
         base_frame = self._base_frame_effective or BASE_FRAME or "base_link"
@@ -4465,16 +5149,12 @@ class ControlPanelV2(QMainWindow):
                     time.sleep(PICK_TF_RETRY_SEC)
                 if not coords:
                     self._log("[PICK] Bloqueado: TF world->base no disponible")
-                    QTimer.singleShot(
-                        0, lambda: self._set_status("PICK bloqueado: TF world->base no disponible", error=True)
-                    )
+                    self._ui_set_status("PICK bloqueado: TF world->base no disponible", error=True)
                     return
                 self._last_selected_base_pose = (coords[0], coords[1], coords[2], base_frame)
                 pose_data = _make_pose_data(coords, frame=base_frame)
                 self._publish_moveit_pose("PICK_CLICK", pose_data)
-                QTimer.singleShot(
-                    0, lambda: self._set_status("PICK click → /desired_grasp publicado", error=False)
-                )
+                self._ui_set_status("PICK click → /desired_grasp publicado", error=False)
             finally:
                 self._pick_tf_inflight = False
 
@@ -4792,6 +5472,8 @@ class ControlPanelV2(QMainWindow):
         if self._tf_not_ready_logged:
             return
         now = time.monotonic()
+        if self._bridge_start_ts and (time.time() - self._bridge_start_ts) < TF_INIT_GRACE_SEC:
+            return
         if now - self._tf_ready_last_notice >= 1.0:
             self._log("[TRACE] TF not ready yet (waiting for transforms)")
             self._tf_ready_last_notice = now
@@ -4799,6 +5481,8 @@ class ControlPanelV2(QMainWindow):
 
     def _maybe_log_trace(self, now: float):
         if not self._trace_ready:
+            return
+        if "TF world→base: n/a" in (self._trace_cached_text or ""):
             return
         if now - self._last_trace_print_ts >= self._trace_print_period:
             dt = now - self._last_trace_print_ts
@@ -4947,7 +5631,7 @@ class ControlPanelV2(QMainWindow):
                 self._tf_ready_state = False
                 self._maybe_log_tf_not_ready()
                 if prev_state:
-                    QTimer.singleShot(0, self._refresh_controls)
+                    self.signal_refresh_controls.emit()
                 return
             tf_stats = helper.tf_listener_stats()
             if tf_stats[0] == 0 and tf_stats[1] == 0:
@@ -4966,9 +5650,10 @@ class ControlPanelV2(QMainWindow):
                 self._tf_not_ready_logged = False
                 self._base_frame_effective = final_base
                 self._bridge_ready = True
-                self._set_trace_ready()
+                self.signal_trace_ready.emit()
                 if not prev_state:
-                    QTimer.singleShot(0, self._refresh_controls)
+                    self.signal_tf_ready.emit(True)
+                    self.signal_refresh_controls.emit()
                 return
             # Diagnóstico EE frame
             frames = helper.list_frames() if helper else set()
@@ -4979,7 +5664,10 @@ class ControlPanelV2(QMainWindow):
             self._tf_ready_state = False
             self._maybe_log_tf_not_ready()
             if prev_state:
-                QTimer.singleShot(0, self._refresh_controls)
+                self.signal_tf_ready.emit(False)
+                self.signal_refresh_controls.emit()
+            elif self._system_error_reason:
+                self.signal_refresh_controls.emit()
         except Exception as exc:
             self._log_error(f"[TRACE][ERROR] TF readiness error: {exc}")
 
@@ -4998,26 +5686,41 @@ class ControlPanelV2(QMainWindow):
             return None
         frames = helper.list_frames()
         if "base_link" in frames and _can_transform_between(helper, "base_link", world_frame, timeout_sec=0.15):
-            return "base_link"
+            if self._tf_world_base_valid(helper, "base_link", world_frame):
+                return "base_link"
+            return None
         base_frame, _ = discover_base_and_ee_frames(world_frame)
         preferred_base = _preferred_base_frame(helper, world_frame, timeout_sec=0.25)
         final_base = preferred_base or base_frame
         if final_base and _can_transform_between(helper, final_base, world_frame, timeout_sec=0.15):
-            return final_base
+            if self._tf_world_base_valid(helper, final_base, world_frame):
+                return final_base
         return None
+
+    def _tf_world_base_valid(self, helper: "TfHelper", base_frame: str, world_frame: str) -> bool:
+        transform = helper.lookup_transform(base_frame, world_frame, timeout_sec=0.15)
+        if not transform:
+            return False
+        t = transform.transform.translation
+        if abs(t.x) < 1e-3 and abs(t.y) < 1e-3 and abs(t.z) < 1e-3:
+            if abs(UR5_BASE_X) > 0.1 or abs(UR5_BASE_Y) > 0.1 or abs(UR5_BASE_Z) > 0.1:
+                msg = "[TF][ERROR] world->base es identidad; TF inválido para este mundo"
+                if not self._tf_invalid:
+                    self._emit_log(msg)
+                    self._ui_set_status("TF inválido: world->base es identidad", error=True)
+                self._tf_invalid = True
+                if self._system_error_reason != msg:
+                    self._system_error_reason = msg
+                    self._set_system_state(SystemState.ERROR, msg)
+                return False
+        self._tf_invalid = False
+        if self._system_error_reason == "[TF][ERROR] world->base es identidad; TF inválido para este mundo":
+            self._system_error_reason = ""
+        return True
 
     def _stop_tf_ready_timer(self):
         if self._tf_ready_timer:
             self._tf_ready_timer.stop()
-
-    def _set_trace_ready(self):
-        if self._trace_ready:
-            return
-        self._bridge_ready = True
-        self._trace_ready = True
-        self._stop_tf_ready_timer()
-        self._log("[TRACE] TF ready → TRACE enabled")
-        self._refresh_trace_data()
 
     def _build_trace_text(
         self,
@@ -5176,7 +5879,11 @@ class ControlPanelV2(QMainWindow):
                 if not self._ros_worker_started:
                     self._ensure_ros_worker_started()
                 if not self.ros_worker.node_ready():
-                    self._set_status("Nodo ROS no listo", error=True)
+                    self._ui_set_status("Nodo ROS no listo", error=True)
+                    return
+                ok, reason = self._wait_for_controllers_ready(CONTROLLER_READY_TIMEOUT_SEC)
+                if not ok:
+                    self._ui_set_status(f"Controladores no listos: {reason}", error=True)
                     return
 
                 topic = self._select_traj_topic()
@@ -5195,7 +5902,7 @@ class ControlPanelV2(QMainWindow):
                 
                 pub = self._get_traj_publisher(topic)
                 if not pub:
-                    self._set_status("Publisher JointTrajectory no disponible", error=True)
+                    self._ui_set_status("Publisher JointTrajectory no disponible", error=True)
                     return
                 traj = JointTrajectory()
                 traj.joint_names = list(UR5_JOINT_NAMES)
@@ -5209,7 +5916,7 @@ class ControlPanelV2(QMainWindow):
                 point.time_from_start.nanosec = nsec_i
                 traj.points = [point]
                 pub.publish(traj)
-                self._set_status(f"Trayectoria enviada a {topic}")
+                self._ui_set_status(f"Trayectoria enviada a {topic}")
                 if self._debug_logs_enabled:
                     self._log("[MANUAL] ✓ Publicación JointTrajectory")
             finally:
@@ -5254,11 +5961,13 @@ class ControlPanelV2(QMainWindow):
         self._kill_proc(self.bag_proc, "ros2 bag record")
         self._kill_proc(self.bridge_proc, "parameter_bridge")
         self._kill_proc(self.release_service_proc, "release_objects_service")
+        self._kill_proc(self.world_tf_proc, "world_tf_publisher")
         self._kill_proc(self.rsp_proc, "robot_state_publisher")
         self._kill_proc(self.gz_proc, "gz sim")
         self.bag_proc = None
         self.bridge_proc = None
         self.release_service_proc = None
+        self.world_tf_proc = None
         self.rsp_proc = None
         self.gz_proc = None
         self._kill_proc(self.moveit_bridge_proc, "ur5_moveit_bridge")
@@ -5271,6 +5980,8 @@ class ControlPanelV2(QMainWindow):
             subprocess.run(["bash", "-lc", "pkill -f 'ros_gz_bridge' || true; pkill -f parameter_bridge || true"], check=False)
         if self._started_release_service:
             subprocess.run(["bash", "-lc", "pkill -f 'release_objects_service' || true"], check=False)
+        if self._started_world_tf:
+            subprocess.run(["bash", "-lc", "pkill -f 'world_tf_publisher' || true"], check=False)
         if self._started_rsp:
             subprocess.run(["bash", "-lc", "pkill -f 'robot_state_publisher' || true"], check=False)
         if self._started_gazebo:

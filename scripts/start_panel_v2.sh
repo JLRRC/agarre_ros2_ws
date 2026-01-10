@@ -77,84 +77,66 @@ set -u
 # --- Recursos Gazebo y modo headless ---
 export GZ_SIM_RESOURCE_PATH="$WS_DIR/models:$WS_DIR/worlds:$WS_DIR/install${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 export GZ_SIM_SYSTEM_PLUGIN_PATH="/opt/ros/jazzy/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:$GZ_SIM_SYSTEM_PLUGIN_PATH}"
-if [[ "${PANEL_START_STACK}" == "1" ]]; then
-  export PANEL_AUTO_BRIDGE="${PANEL_AUTO_BRIDGE:-1}"
-else
-  export PANEL_AUTO_BRIDGE="${PANEL_AUTO_BRIDGE:-0}"
-fi
 export PANEL_AUTO_BRIDGE_DELAY_MS="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"
+export RMW_FASTRTPS_USE_SHM="${RMW_FASTRTPS_USE_SHM:-0}"
+export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-$WS_DIR/scripts/fastdds_no_shm.xml}"
 log "GZ_SIM_RESOURCE_PATH set to: $GZ_SIM_RESOURCE_PATH"
 
-# Alinear particion de GZ para que el bridge vea los topics correctos.
-if [[ -z "${GZ_PARTITION:-}" ]]; then
-  GZ_PARTITION="ur5pro_$(date +%s)"
-  export GZ_PARTITION
+export LIBGL_ALWAYS_SOFTWARE=1
+export QT_XCB_GL_INTEGRATION=none
+export PANEL_SKIP_CLEANUP=1
+if [[ -z "${DISPLAY:-}" ]]; then
+  export QT_QPA_PLATFORM=offscreen
 fi
-mkdir -p "$WS_DIR/log"
-echo "$GZ_PARTITION" > "$WS_DIR/log/gz_partition.txt"
-log "GZ_PARTITION set to: $GZ_PARTITION"
 
+log "Nota: start_panel_v2.sh es wrapper; usa ros2 launch ur5_bringup ur5_stack.launch.py"
+
+PANEL_START_ROS2_CONTROL="${PANEL_START_ROS2_CONTROL:-0}"
+PANEL_LAUNCH_BRIDGE="${PANEL_LAUNCH_BRIDGE:-$PANEL_START_STACK}"
+HEADLESS="true"
+if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
+  HEADLESS="false"
+fi
+
+LAUNCH_GZ="false"
+LAUNCH_RSP="false"
 if [[ "${PANEL_START_STACK}" == "1" ]]; then
-  # Lanzar robot_state_publisher antes de Gazebo para publicar /robot_description
-  log "Lanzando robot_state_publisher (UR5 RSP)"
-  ros2 launch ur5_bringup ur5_rsp.launch.py use_sim_time:=true >/tmp/ur5_rsp.log 2>&1 &
+  LAUNCH_GZ="true"
+  LAUNCH_RSP="true"
+fi
 
-  # Lanzar Gazebo en modo headless por defecto
-  if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
-    log "Lanzando Gazebo en modo GUI"
-    GZ_PARTITION="$GZ_PARTITION" gz sim -r "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
-  else
-    log "Lanzando Gazebo en modo headless"
-    EGL_VENDOR_DEFAULT="/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
-    EGL_VENDOR_PATH="${EGL_VENDOR:-$EGL_VENDOR_DEFAULT}"
-    EGL_ENV=()
-    if [[ -f "$EGL_VENDOR_PATH" ]]; then
-      EGL_ENV+=("__EGL_VENDOR_LIBRARY_FILENAMES=$EGL_VENDOR_PATH")
-    fi
-    env -u DISPLAY "${EGL_ENV[@]}" GZ_RENDER_ENGINE=ogre2 GZ_PARTITION="$GZ_PARTITION" \
-      gz sim -s -r --headless-rendering "$WS_DIR/worlds/ur5_mesa_objetos.sdf" &
-  fi
+LAUNCH_BRIDGE="false"
+if [[ "${PANEL_LAUNCH_BRIDGE}" == "1" ]]; then
+  LAUNCH_BRIDGE="true"
+fi
+
+LAUNCH_ROS2_CONTROL="false"
+if [[ "${PANEL_START_ROS2_CONTROL}" == "1" ]]; then
+  LAUNCH_ROS2_CONTROL="true"
+fi
+
+LAUNCH_FILE_PKG="ur5_stack.launch.py"
+LAUNCH_FILE_INSTALLED="$WS_DIR/install/ur5_bringup/share/ur5_bringup/$LAUNCH_FILE_PKG"
+LAUNCH_FILE_SRC="$WS_DIR/src/ur5_bringup/launch/$LAUNCH_FILE_PKG"
+LAUNCH_TARGET="ur5_bringup $LAUNCH_FILE_PKG"
+if [[ -f "$LAUNCH_FILE_INSTALLED" ]]; then
+  LAUNCH_TARGET="ur5_bringup $LAUNCH_FILE_PKG"
+elif [[ -f "$LAUNCH_FILE_SRC" ]]; then
+  LAUNCH_TARGET="$LAUNCH_FILE_SRC"
 else
-  log "PANEL_START_STACK=0 → no se autoarranca RSP/Gazebo (modo manual desde el panel)"
+  err "no encuentro ur5_stack.launch.py en install o src"
+  err " - $LAUNCH_FILE_INSTALLED"
+  err " - $LAUNCH_FILE_SRC"
+  err "Solución típica: colcon build --symlink-install"
+  exit 1
 fi
 
-# --- decidir cómo lanzar panel_v2 ---
-INSTALLED_BIN="$WS_DIR/install/ur5_qt_panel/lib/ur5_qt_panel/panel_v2"
-SRC_PY="$WS_DIR/src/ur5_qt_panel/ur5_qt_panel/panel_v2.py"
-
-if [[ "$PANEL_V2_PREFER_INSTALLED" == "1" && -x "$INSTALLED_BIN" ]]; then
-  log "Lanzando panel_v2 (instalado): $INSTALLED_BIN"
-  export LIBGL_ALWAYS_SOFTWARE=1
-  export QT_XCB_GL_INTEGRATION=none
-  export PANEL_SKIP_CLEANUP=1
-  if [[ -z "${DISPLAY:-}" ]]; then
-    export QT_QPA_PLATFORM=offscreen
-  fi
-  exec "$INSTALLED_BIN"
-fi
-
-# Fallback: ejecutar desde src
-if [[ -f "$SRC_PY" ]]; then
-  log "Lanzando panel_v2 (src): $SRC_PY"
-  # Asegurar que Python encuentre el paquete
-  export PYTHONPATH="$WS_DIR/src/ur5_qt_panel:${PYTHONPATH:-}"
-  export LIBGL_ALWAYS_SOFTWARE=1
-  export QT_XCB_GL_INTEGRATION=none
-  export PANEL_SKIP_CLEANUP=1
-  if [[ -z "${DISPLAY:-}" ]]; then
-    export QT_QPA_PLATFORM=offscreen
-  fi
-  exec /usr/bin/python3 "$SRC_PY"
-fi
-
-# Último fallback: módulo python (si estuviera instalado en site-packages)
-log "Fallback: intentando python -m ur5_qt_panel.panel_v2"
-if /usr/bin/python3 -c "import ur5_qt_panel.panel_v2" >/dev/null 2>&1; then
-  exec /usr/bin/python3 -m ur5_qt_panel.panel_v2
-fi
-
-err "no encuentro panel_v2 en:"
-err " - $INSTALLED_BIN (instalado ejecutable)"
-err " - $SRC_PY (archivo fuente)"
-err "Solución típica: recuperar src/ur5_qt_panel/ur5_qt_panel/panel_v2.py o reconstruir con colcon build."
-exit 1
+exec ros2 launch $LAUNCH_TARGET \
+  headless:="$HEADLESS" \
+  launch_panel:=true \
+  launch_gazebo:="$LAUNCH_GZ" \
+  launch_rsp:="$LAUNCH_RSP" \
+  launch_bridge:="$LAUNCH_BRIDGE" \
+  launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
+  panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
+  panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"

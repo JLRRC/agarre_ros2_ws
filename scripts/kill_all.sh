@@ -21,6 +21,7 @@ PATTERNS=(
   "ur5_ros2_control.launch.py"
   "ros2_control_node"
   "robot_state_publisher"
+  "world_tf_publisher"
   "controller_manager spawner"
   "spawner_joint"
   "spawner_gripper"
@@ -39,7 +40,7 @@ kill_all() {
 }
 
 any_running() {
-  pgrep -af "ros2 bag record|ros_gz_bridge|parameter_bridge|gz sim|gz-sim|gzserver|gzclient|Xvfb|ros2 launch ur5_bringup|ur5_ros2_control.launch.py|ros2_control_node|robot_state_publisher|controller_manager spawner|spawner_joint|spawner_gripper" >/dev/null 2>&1
+  pgrep -af "ros2 bag record|ros_gz_bridge|parameter_bridge|gz sim|gz-sim|gzserver|gzclient|Xvfb|ros2 launch ur5_bringup|ur5_ros2_control.launch.py|ros2_control_node|robot_state_publisher|world_tf_publisher|controller_manager spawner|spawner_joint|spawner_gripper" >/dev/null 2>&1
 }
 
 # 1) TERM
@@ -75,6 +76,5 @@ if any_running; then
 else
   echo "[KILL] OK. Sistema limpio."
 fi
-
 
 

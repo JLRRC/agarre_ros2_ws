@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'ur5_moveit_bridge = ur5_tools.ur5_moveit_bridge:main',
             'release_objects_service = ur5_tools.release_objects_service:main',
+            'world_tf_publisher = ur5_tools.world_tf_publisher:main',
         ],
     },
 )

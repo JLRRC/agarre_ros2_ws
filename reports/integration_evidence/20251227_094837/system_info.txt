@@ -1,9 +1,0 @@
-timestamp=20251227_094837
-Linux laboratorio-MS-7C56 6.14.0-37-generic #37~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 20 10:25:38 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
-Distributor ID:	Ubuntu
-Description:	Ubuntu 24.04.3 LTS
-Release:	24.04
-Codename:	noble
-ROS_DISTRO=jazzy
-GZ_PARTITION=<none>
-GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share

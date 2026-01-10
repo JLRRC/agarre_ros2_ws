@@ -3,11 +3,6 @@
 <!-- Summary: SDF model of the UR5 robot with RG2 gripper meshes and joints. -->
 <sdf version="1.7">
     <model name="ur5_rg2">
-        <!-- Fix To World -->
-        <joint name="ur5_rg2_joint_world" type="fixed">
-            <parent>world</parent>
-            <child>base_link</child>
-        </joint>
         <!-- Arm Links -->
         <link name="base_link">
             <gravity>false</gravity>
@@ -635,6 +630,15 @@
             <position_i_max>1</position_i_max>
             <position_cmd_min>-20</position_cmd_min>
             <position_cmd_max>20</position_cmd_max>
+        </plugin>
+        <plugin
+            filename="gz-sim-pose-publisher-system"
+            name="gz::sim::systems::PosePublisher">
+            <publish_pose>true</publish_pose>
+            <publish_link_pose>true</publish_link_pose>
+            <publish_visual_pose>false</publish_visual_pose>
+            <publish_collision_pose>false</publish_collision_pose>
+            <static_publisher>false</static_publisher>
         </plugin>
         <plugin
             filename="gz-sim-joint-state-publisher-system"

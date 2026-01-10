@@ -22,15 +22,23 @@ sudo apt install ros-jazzy-tf2-geometry-msgs
 
 ## Bringup oficial (único)
 ```bash
-./scripts/start_panel_v2.sh
+ros2 launch ur5_bringup ur5_stack.launch.py
 ```
 
 Variables útiles:
-- `PANEL_COLD_BOOT=1` (limpia procesos previos antes de arrancar)
-- `PANEL_GZ_GUI=1` (lanza Gazebo con GUI)
-- `PANEL_AUTO_BRIDGE=1` (autolanza ros_gz_bridge)
-- `PANEL_START_STACK=0` (modo manual: no autoarranca RSP/Gazebo; default)
-- `PANEL_V2_PREFER_INSTALLED=1` (usa binario instalado si existe)
+- `PANEL_COLD_BOOT=1` (limpia procesos previos antes de arrancar si usas el wrapper)
+- `PANEL_GZ_GUI=1` (lanza Gazebo con GUI desde el wrapper)
+- `PANEL_AUTO_BRIDGE=1` (permite que el panel lance el bridge)
+- `PANEL_START_STACK=0` (modo panel-only desde el wrapper)
+
+Argumentos útiles del launch:
+- `headless:=true|false`
+- `launch_panel:=true|false`
+- `launch_gazebo:=true|false`
+- `launch_rsp:=true|false`
+- `launch_bridge:=true|false`
+- `launch_ros2_control:=true|false`
+- `launch_moveit:=true|false`
 
 ## Debug manual (solo si hace falta)
 ```bash

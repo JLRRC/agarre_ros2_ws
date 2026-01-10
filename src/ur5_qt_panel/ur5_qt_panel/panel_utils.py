@@ -131,7 +131,7 @@ try:
     from geometry_msgs.msg import PointStamped, PoseStamped, Quaternion, TransformStamped
     from builtin_interfaces.msg import Time as BuiltinTime
     from controller_manager_msgs.srv import ListControllers
-    from std_msgs.msg import Empty
+    from std_msgs.msg import Empty, String
     from tf2_ros import (
         Buffer,
         TransformListener,
@@ -173,6 +173,7 @@ except Exception:
     Time = None  # type: ignore
     TFMessage = None  # type: ignore
     Empty = None  # type: ignore
+    String = None  # type: ignore
     ListControllers = None  # type: ignore
     QoSProfile = None  # type: ignore
     ReliabilityPolicy = None  # type: ignore
@@ -1409,10 +1410,20 @@ class CmdRunner(QObject):
         threading.Thread(target=worker, daemon=True).start()
 
 
+class _RosWorkerThread(QThread):
+    def __init__(self, worker: "RosWorker"):
+        super().__init__()
+        self._worker = worker
+
+    def run(self):
+        self._worker._thread_main()
+
+
 class RosWorker(QObject):
     log = pyqtSignal(str)
     image = pyqtSignal(str, QImage, int, int, float)
     joint_state = pyqtSignal(object)
+    system_state = pyqtSignal(str, str)
 
     def __init__(self, force_realtime: bool = False):
         super().__init__()
@@ -1421,7 +1432,7 @@ class RosWorker(QObject):
         self._node = None
         self._exec = None
         self._bridge = None
-        self._thread: Optional[threading.Thread] = None
+        self._thread: Optional[QThread] = None
         self._subs: Dict[str, object] = {}
         self._pose_sub = None
         self._pose_topic = ""
@@ -1441,6 +1452,9 @@ class RosWorker(QObject):
         self._joint_emit_interval = 0.1
         self._last_joint_payload: Optional[dict] = None
         self._last_joint_wall: float = 0.0
+        self._cleanup_done = False
+        self._system_diag_reason: str = ""
+        self._system_state_last: str = ""
         try:
             max_fps = float(os.environ.get("PANEL_MAX_FPS", "60"))
             if max_fps <= 0:
@@ -1458,64 +1472,21 @@ class RosWorker(QObject):
             if self._running:
                 return
             self._running = True
-        thread = threading.Thread(target=self._thread_main, daemon=True)
+            self._cleanup_done = False
+        thread = _RosWorkerThread(self)
         self._thread = thread
+        self.moveToThread(thread)
         thread.start()
 
     def stop(self):
         with self._lock:
             self._running = False
-        try:
-            if self._node and self._subs:
-                for topic, sub in list(self._subs.items()):
-                    try:
-                        self._node.destroy_subscription(sub)
-                    except Exception:
-                        pass
-                self._subs.clear()
-            if self._node and self._joint_sub is not None:
-                try:
-                    self._node.destroy_subscription(self._joint_sub)
-                except Exception:
-                    pass
-                self._joint_sub = None
-                self._joint_topic = ""
-            if self._node and self._pose_sub is not None:
-                try:
-                    self._node.destroy_subscription(self._pose_sub)
-                except Exception:
-                    pass
-                self._pose_sub = None
-                self._pose_topic = ""
-                self._pose_cache.clear()
-                self._pose_last_wall = 0.0
-                self._pose_msg_count = 0
-                self._pose_last_entities = 0
-            if self._node and self._pubs:
-                for _topic, pub in list(self._pubs.items()):
-                    try:
-                        self._node.destroy_publisher(pub)
-                    except Exception:
-                        pass
-                self._pubs.clear()
-            if self._exec and self._node:
-                try:
-                    self._exec.remove_node(self._node)
-                except Exception:
-                    pass
-            if self._node:
-                try:
-                    self._node.destroy_node()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        self._node = None
-        self._exec = None
-        self._bridge = None
+        self._cleanup_ros()
         thread = self._thread
-        if thread and thread is not threading.current_thread():
-            thread.join(timeout=1.0)
+        if thread is not None:
+            if QThread.currentThread() != thread:
+                thread.quit()
+                thread.wait(1000)
         self._thread = None
 
     def stop_and_join(self):
@@ -1530,6 +1501,19 @@ class RosWorker(QObject):
             return [name for name, _ in node.get_topic_names_and_types()]
         except Exception:
             return []
+
+    def topic_has_publishers(self, topic: str) -> bool:
+        topic = (topic or "").strip()
+        if not topic:
+            return False
+        with self._lock:
+            node = self._node
+        if node is None:
+            return False
+        try:
+            return bool(node.get_publishers_info_by_topic(topic))
+        except Exception:
+            return False
 
     def topic_names_and_types(self) -> List[Tuple[str, List[str]]]:
         with self._lock:
@@ -1829,6 +1813,16 @@ class RosWorker(QObject):
             self._exec = SingleThreadedExecutor()
             self._exec.add_node(self._node)
             self._node.create_subscription(Clock, "/clock", lambda _msg: self._update_clock(), qos_profile_sensor_data)
+            if String is not None:
+                try:
+                    self._subs["/system_state"] = self._node.create_subscription(
+                        String, "/system_state", self._on_system_state, 10
+                    )
+                    self._subs["/system_diag"] = self._node.create_subscription(
+                        String, "/system_diag", self._on_system_diag, 10
+                    )
+                except Exception:
+                    pass
             try:
                 self.log.emit("[ROS] OK: nodo listo.")
             except RuntimeError:
@@ -1858,10 +1852,61 @@ class RosWorker(QObject):
                     break
                 time.sleep(0.1)
         # Limpieza final (evita logs si ya estamos apagando)
+        self._cleanup_ros()
+
+    def _cleanup_ros(self):
+        with self._lock:
+            if self._cleanup_done:
+                return
+            self._cleanup_done = True
         try:
-            self.stop()
+            if self._node and self._subs:
+                for topic, sub in list(self._subs.items()):
+                    try:
+                        self._node.destroy_subscription(sub)
+                    except Exception:
+                        pass
+                self._subs.clear()
+            if self._node and self._joint_sub is not None:
+                try:
+                    self._node.destroy_subscription(self._joint_sub)
+                except Exception:
+                    pass
+                self._joint_sub = None
+                self._joint_topic = ""
+            if self._node and self._pose_sub is not None:
+                try:
+                    self._node.destroy_subscription(self._pose_sub)
+                except Exception:
+                    pass
+                self._pose_sub = None
+                self._pose_topic = ""
+                self._pose_cache.clear()
+                self._pose_last_wall = 0.0
+                self._pose_msg_count = 0
+                self._pose_last_entities = 0
+            if self._node and self._pubs:
+                for _topic, pub in list(self._pubs.items()):
+                    try:
+                        self._node.destroy_publisher(pub)
+                    except Exception:
+                        pass
+                self._pubs.clear()
+            if self._exec and self._node:
+                try:
+                    self._exec.remove_node(self._node)
+                except Exception:
+                    pass
+            if self._node:
+                try:
+                    self._node.destroy_node()
+                except Exception:
+                    pass
         except Exception:
             pass
+        self._node = None
+        self._exec = None
+        self._bridge = None
 
     def _update_clock(self):
         with self._lock:
@@ -1906,6 +1951,38 @@ class RosWorker(QObject):
         with self._lock:
             self._last_joint_payload = payload
             self._last_joint_wall = now
+
+    def _on_system_diag(self, msg: "String") -> None:
+        try:
+            raw = getattr(msg, "data", "") or ""
+        except Exception:
+            return
+        reason = ""
+        if raw:
+            try:
+                data = json.loads(raw)
+                reason = str(data.get("reason") or "")
+            except Exception:
+                reason = ""
+        with self._lock:
+            self._system_diag_reason = reason
+
+    def _on_system_state(self, msg: "String") -> None:
+        try:
+            state = getattr(msg, "data", "") or ""
+        except Exception:
+            return
+        if not state:
+            return
+        with self._lock:
+            reason = self._system_diag_reason
+            if state == self._system_state_last and not reason:
+                return
+            self._system_state_last = state
+        try:
+            self.system_state.emit(state, reason or "")
+        except RuntimeError:
+            pass
 
         # (opcional) emitir solo cada X para UI/debug
         if (now - self._last_joint_emit) < self._joint_emit_interval:
