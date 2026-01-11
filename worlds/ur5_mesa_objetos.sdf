@@ -309,6 +309,10 @@
       <pose>-0.85 0.00 0.775 0 0 0</pose>
       <!-- Plugin PosePublisher eliminado: no disponible en el sistema -->
     </include>
+    <joint name="ur5_rg2_fixed_to_world" type="fixed">
+      <parent>world</parent>
+      <child>ur5_rg2::base_link</child>
+    </joint>
 
     <!-- ======================================================
          CAMARAS RGBD

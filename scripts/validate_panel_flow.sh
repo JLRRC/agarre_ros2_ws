@@ -4,6 +4,18 @@ set -euo pipefail
 log() { echo "[VALIDATE] $*"; }
 warn() { echo "[VALIDATE][WARN] $*" >&2; }
 
+if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+  # shellcheck disable=SC1091
+  source /opt/ros/jazzy/setup.bash
+fi
+if [[ -n "${WS_DIR:-}" && -f "${WS_DIR}/install/setup.bash" ]]; then
+  # shellcheck disable=SC1091
+  source "${WS_DIR}/install/setup.bash"
+elif [[ -f "$(pwd)/install/setup.bash" ]]; then
+  # shellcheck disable=SC1091
+  source "$(pwd)/install/setup.bash"
+fi
+
 if ! command -v ros2 >/dev/null 2>&1; then
   warn "ros2 no está disponible en PATH."
   exit 1
@@ -17,7 +29,7 @@ fi
 
 log "Comprobando /clock..."
 if ros2 topic list | filter "^/clock$" >/dev/null 2>&1; then
-  if timeout 2.0 ros2 topic echo -n 1 /clock >/dev/null 2>&1; then
+  if timeout 2.0 ros2 topic echo --once /clock >/dev/null 2>&1; then
     log "OK /clock publica."
   else
     warn "Existe /clock pero no publica (timeout)."
@@ -88,7 +100,7 @@ fi
 
 log "Comprobando /system_state..."
 if ros2 topic list | filter "^/system_state$" >/dev/null 2>&1; then
-  if timeout 2.0 ros2 topic echo -n 1 /system_state >/dev/null 2>&1; then
+  if timeout 2.0 ros2 topic echo --once /system_state >/dev/null 2>&1; then
     log "OK /system_state publica."
   else
     warn "/system_state existe pero no publica (timeout)."
@@ -99,13 +111,35 @@ fi
 
 log "Comprobando /system_diag..."
 if ros2 topic list | filter "^/system_diag$" >/dev/null 2>&1; then
-  if timeout 2.0 ros2 topic echo -n 1 /system_diag >/dev/null 2>&1; then
+  if timeout 2.0 ros2 topic echo --once /system_diag >/dev/null 2>&1; then
     log "OK /system_diag publica."
   else
     warn "/system_diag existe pero no publica (timeout)."
   fi
 else
   warn "/system_diag no existe."
+fi
+
+log "Comprobando TF con tf_probe..."
+if command -v ros2 >/dev/null 2>&1; then
+  if timeout 6.0 ros2 run ur5_tools tf_probe --ros-args -p use_sim_time:=true >/dev/null 2>&1; then
+    log "OK tf_probe (world->base_link, base_link->tool0)."
+  else
+    warn "tf_probe reporta TF inestable o faltante."
+  fi
+else
+  warn "No se pudo ejecutar tf_probe (ros2 no disponible)."
+fi
+
+log "Comprobando JointTrajectory con jt_smoke_test..."
+if command -v ros2 >/dev/null 2>&1; then
+  if timeout 8.0 ros2 run ur5_tools jt_smoke_test --ros-args -p use_sim_time:=true >/dev/null 2>&1; then
+    log "OK jt_smoke_test (joint_states cambian)."
+  else
+    warn "jt_smoke_test falló (no hay movimiento real)."
+  fi
+else
+  warn "No se pudo ejecutar jt_smoke_test (ros2 no disponible)."
 fi
 
 log "Validación básica completada."

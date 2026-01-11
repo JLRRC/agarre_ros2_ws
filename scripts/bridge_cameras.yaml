@@ -68,3 +68,76 @@
 
 
 # Control por ros2_control: no se bridgean comandos de trayectoria.
+
+# Detachable joints (gripper attach/detach)
+- ros_topic_name: /gripper/cubo_rojo/attach
+  gz_topic_name: /gripper/cubo_rojo/attach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/cubo_rojo/detach
+  gz_topic_name: /gripper/cubo_rojo/detach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/cubo_rojo/state
+  gz_topic_name: /gripper/cubo_rojo/state
+  ros_type_name: std_msgs/msg/Bool
+  gz_type_name: gz.msgs.Boolean
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /gripper/cilindro_verde/attach
+  gz_topic_name: /gripper/cilindro_verde/attach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/cilindro_verde/detach
+  gz_topic_name: /gripper/cilindro_verde/detach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/cilindro_verde/state
+  gz_topic_name: /gripper/cilindro_verde/state
+  ros_type_name: std_msgs/msg/Bool
+  gz_type_name: gz.msgs.Boolean
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /gripper/caja_azul/attach
+  gz_topic_name: /gripper/caja_azul/attach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/caja_azul/detach
+  gz_topic_name: /gripper/caja_azul/detach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/caja_azul/state
+  gz_topic_name: /gripper/caja_azul/state
+  ros_type_name: std_msgs/msg/Bool
+  gz_type_name: gz.msgs.Boolean
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /gripper/pieza_pick_mesa/attach
+  gz_topic_name: /gripper/pieza_pick_mesa/attach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/pieza_pick_mesa/detach
+  gz_topic_name: /gripper/pieza_pick_mesa/detach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /gripper/pieza_pick_mesa/state
+  gz_topic_name: /gripper/pieza_pick_mesa/state
+  ros_type_name: std_msgs/msg/Bool
+  gz_type_name: gz.msgs.Boolean
+  direction: GZ_TO_ROS

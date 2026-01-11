@@ -148,6 +148,7 @@ except Exception:
     Parameter = None
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from std_srvs.srv import Trigger
+from std_msgs.msg import Float64MultiArray
 try:
     from controller_manager_msgs.srv import ListControllers
 except Exception:
@@ -178,6 +179,10 @@ CONTROLLER_DROP_GRACE_SEC = float(os.environ.get("PANEL_CTRL_DROP_GRACE_SEC", "3
 TRACE_PRINT_PERIOD_SEC = float(os.environ.get("PANEL_TRACE_PRINT_PERIOD_SEC", "3.0"))
 DEBUG_POSES_PERIOD_SEC = float(os.environ.get("PANEL_DEBUG_POSES_PERIOD_SEC", "3.0"))
 PICK_LOG_MIN_INTERVAL_SEC = float(os.environ.get("PANEL_PICK_LOG_MIN_INTERVAL_SEC", "2.0"))
+GRIPPER_CMD_TOPIC = os.environ.get("PANEL_GRIPPER_CMD_TOPIC", "/gripper_controller/commands")
+GRIPPER_OPEN_RAD = float(os.environ.get("PANEL_GRIPPER_OPEN_RAD", "1.0"))
+GRIPPER_CLOSED_RAD = float(os.environ.get("PANEL_GRIPPER_CLOSED_RAD", "0.0"))
+GRIPPER_JOINT2_SIGN = float(os.environ.get("PANEL_GRIPPER_JOINT2_SIGN", "1.0"))
 def _env_flag(name: str, default: str = "0") -> bool:
     value = os.environ.get(name, default)
     return str(value).strip().lower() in ("1", "true", "yes", "on")
@@ -300,20 +305,20 @@ POSE_HOME_DATA = _make_pose_data((0.18, 0.0, 0.35))
 POSE_TABLE_DATA = _make_pose_data((0.30, -0.35, 0.28))
 POSE_BASKET_DATA = _make_pose_data((0.45, 0.28, 0.32))
 JOINT_TABLE_POSE_RAD = [
-    math.radians(160.0),
-    math.radians(0.0),
-    math.radians(100.0),
-    math.radians(-25.0),
-    math.radians(-90.0),
-    math.radians(60.0),
+    math.radians(-2.7),
+    math.radians(-0.1),
+    math.radians(90.0),
+    math.radians(-5.5),
+    math.radians(-90.7),
+    math.radians(0.9),
 ]
 JOINT_BASKET_POSE_RAD = [
-    math.radians(180.0),
-    math.radians(30.0),
-    math.radians(170.4),
-    math.radians(0.0),
-    math.radians(-100.0),
-    math.radians(60.0),
+    math.radians(167.6),
+    math.radians(-0.1),
+    math.radians(90.0),
+    math.radians(-5.5),
+    math.radians(-90.7),
+    math.radians(0.9),
 ]
 JOINT_HOME_POSE_RAD = [
     math.radians(0.0),
@@ -581,6 +586,8 @@ class ControlPanelV2(QMainWindow):
         self.signal_moveit_state.connect(self._on_moveit_state_signal)
         self._moveit_node: Optional[Node] = None
         self._moveit_pose_pub = None
+        self._gripper_pub = None
+        self._gripper_topic = ""
         self._traj_pub = None
         self._traj_topic = ""
         self._traj_action_client = None
@@ -651,6 +658,7 @@ class ControlPanelV2(QMainWindow):
         self._last_joint_stamp: float = 0.0
         self._joint_current_topic = ""
         self._joint_active = False
+        self._joint_names_warned = False
         self.dof_pos_labels: Dict[str, QLabel] = {}
         self.dof_vel_labels: Dict[str, QLabel] = {}
         self.gripper_labels: Dict[str, QLabel] = {}
@@ -848,6 +856,18 @@ class ControlPanelV2(QMainWindow):
                 self._log(f"[Panel] ERROR creando publisher JointTrajectory: {exc}")
                 self._traj_pub = None
         return self._traj_pub
+
+    def _get_gripper_publisher(self, topic: str):
+        if self._moveit_node is None:
+            return None
+        if self._gripper_pub is None or self._gripper_topic != topic:
+            try:
+                self._gripper_pub = self._moveit_node.create_publisher(Float64MultiArray, topic, 10)
+                self._gripper_topic = topic
+            except Exception as exc:
+                self._log(f"[Panel] ERROR creando publisher gripper: {exc}")
+                self._gripper_pub = None
+        return self._gripper_pub
 
     def _traj_action_target(self, traj_topic: str) -> str:
         if not traj_topic:
@@ -1942,7 +1962,7 @@ class ControlPanelV2(QMainWindow):
     def _on_calibration_check(self) -> None:
         if self._calibration_ready:
             return
-        if not self._objects_settled:
+        if not self._objects_settled and not ALLOW_UNSETTLED_ON_TIMEOUT:
             self._log_calib_blocked("esperando caída/estabilidad de objetos")
             return
         if not self._pose_info_ok:
@@ -2034,11 +2054,12 @@ class ControlPanelV2(QMainWindow):
         return self._gazebo_state() == "GAZEBO_READY" and self._controllers_ok
 
     def _moveit_control_ready(self) -> bool:
+        objects_ok = self._objects_settled or ALLOW_UNSETTLED_ON_TIMEOUT
         return (
             self._manual_control_ready()
             and self._moveit_ready()
             and (self._camera_stream_ok or not self._camera_required)
-            and self._objects_settled
+            and objects_ok
         )
 
     def _pick_ui_allowed(self) -> bool:
@@ -2982,6 +3003,13 @@ class ControlPanelV2(QMainWindow):
         if pos_map:
             self._last_joint_positions.update(pos_map)
             self._last_joint_time = now
+            if not self._joint_names_warned:
+                if not any(j in pos_map for j in UR5_JOINT_NAMES):
+                    sample = ", ".join(sorted(list(pos_map.keys()))[:8])
+                    self._log_warning(
+                        f"[JOINTS] Joint names no coinciden con UR5_JOINT_NAMES. sample={sample}"
+                    )
+                    self._joint_names_warned = True
 
         if pos_map and not any(slider.isSliderDown() for slider in self.joint_sliders):
             # Protección extra: no actualizar sliders si el usuario acaba de interactuar manualmente
@@ -5018,7 +5046,18 @@ class ControlPanelV2(QMainWindow):
         self._gripper_closed = checked
         self.btn_gripper.setText("Abrir gripper" if checked else "Cerrar gripper")
         self._log_button(f"Gripper {'cerrar' if checked else 'abrir'}")
-        # Aquí podrías enviar comando al gripper si fuera necesario
+        if self._moveit_node is None:
+            self._init_moveit_publisher()
+        pub = self._get_gripper_publisher(GRIPPER_CMD_TOPIC)
+        if pub is None:
+            self._set_status("Gripper: publisher no disponible", error=True)
+            self._log_warning("[GRIPPER] Publisher no disponible")
+            return
+        target = GRIPPER_CLOSED_RAD if checked else GRIPPER_OPEN_RAD
+        msg = Float64MultiArray()
+        msg.data = [float(target), float(target) * GRIPPER_JOINT2_SIGN]
+        pub.publish(msg)
+        self._set_status(f"Gripper -> {target:.3f} rad", error=False)
     
     def _on_camera_click(self, px: int, py: int):
         """Manejar click en la imagen de cámara."""
@@ -6749,10 +6788,12 @@ class ControlPanelV2(QMainWindow):
 
 
 def _normalize_joint_name(name) -> str:
-    text = str(name)
+    text = str(name).strip()
     if "::" in text:
-        return text.split("::")[-1]
-    return text
+        text = text.split("::")[-1]
+    if "/" in text:
+        text = text.split("/")[-1]
+    return text.strip()
 
 
 def _rot_to_rpy(rot):

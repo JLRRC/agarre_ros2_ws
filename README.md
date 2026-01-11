@@ -25,6 +25,11 @@ sudo apt install ros-jazzy-tf2-geometry-msgs
 ros2 launch ur5_bringup ur5_stack.launch.py
 ```
 
+## Validación obligatoria post-bringup (profesional)
+```bash
+bash scripts/validate_panel_flow.sh
+```
+
 Variables útiles:
 - `PANEL_COLD_BOOT=1` (limpia procesos previos antes de arrancar si usas el wrapper)
 - `PANEL_GZ_GUI=1` (lanza Gazebo con GUI desde el wrapper)

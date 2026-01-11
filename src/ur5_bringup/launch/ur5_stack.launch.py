@@ -217,6 +217,7 @@ def generate_launch_description():
     launch_release_service = LaunchConfiguration("launch_release_service")
     launch_system_state = LaunchConfiguration("launch_system_state")
     launch_moveit = LaunchConfiguration("launch_moveit")
+    bootstrap_controllers = LaunchConfiguration("bootstrap_controllers")
     moveit_start_ros2_control = LaunchConfiguration("moveit_start_ros2_control")
     use_sim_time = LaunchConfiguration("use_sim_time")
     world_file = LaunchConfiguration("world_file")
@@ -249,7 +250,7 @@ def generate_launch_description():
             {"controller_manager": "/controller_manager"},
             {"wait_for_clock": True},
         ],
-        condition=IfCondition(launch_ros2_control),
+        condition=IfCondition(bootstrap_controllers),
     )
 
     gz_headless = ExecuteProcess(
@@ -347,6 +348,7 @@ def generate_launch_description():
             DeclareLaunchArgument("launch_system_state", default_value="true"),
             DeclareLaunchArgument("launch_moveit", default_value="false"),
             DeclareLaunchArgument("moveit_start_ros2_control", default_value="false"),
+            DeclareLaunchArgument("bootstrap_controllers", default_value="true"),
             DeclareLaunchArgument("panel_auto_bridge", default_value="0"),
             DeclareLaunchArgument("panel_auto_bridge_delay_ms", default_value="1200"),
             DeclareLaunchArgument("panel_managed", default_value="1"),

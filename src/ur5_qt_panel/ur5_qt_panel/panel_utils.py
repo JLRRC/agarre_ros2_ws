@@ -1922,6 +1922,15 @@ class RosWorker(QObject):
         with self._lock:
             self._last_joint_payload = payload
             self._last_joint_wall = now
+            should_emit = (now - self._last_joint_emit) >= self._joint_emit_interval
+            if should_emit:
+                self._last_joint_emit = now
+
+        if should_emit:
+            try:
+                self.joint_state.emit(payload)
+            except RuntimeError:
+                pass
 
     def _on_system_diag(self, msg: "String") -> None:
         try:
