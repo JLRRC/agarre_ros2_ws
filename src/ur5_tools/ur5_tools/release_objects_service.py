@@ -7,6 +7,7 @@ from typing import Dict, List
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
@@ -58,9 +59,14 @@ def main() -> None:
     node = ReleaseObjectsService()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

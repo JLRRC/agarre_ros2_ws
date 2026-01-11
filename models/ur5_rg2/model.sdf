@@ -567,70 +567,6 @@
             <child>tool0</child>
         </joint>
 
-        <!-- Gazebo joint controllers (arm + gripper) -->
-        <plugin
-            filename="gz-sim-joint-trajectory-controller-system"
-            name="gz::sim::systems::JointTrajectoryController">
-            <joint_name>shoulder_pan_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-
-            <joint_name>shoulder_lift_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-
-            <joint_name>elbow_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-
-            <joint_name>wrist_1_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-
-            <joint_name>wrist_2_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-
-            <joint_name>wrist_3_joint</joint_name>
-            <initial_position>0</initial_position>
-            <position_p_gain>80</position_p_gain>
-            <position_i_gain>0.1</position_i_gain>
-            <position_d_gain>2.0</position_d_gain>
-            <position_i_min>-1</position_i_min>
-            <position_i_max>1</position_i_max>
-            <position_cmd_min>-20</position_cmd_min>
-            <position_cmd_max>20</position_cmd_max>
-        </plugin>
         <plugin
             filename="gz-sim-pose-publisher-system"
             name="gz::sim::systems::PosePublisher">
@@ -645,20 +581,6 @@
             name="gz::sim::systems::JointStatePublisher">
         </plugin>
 
-        <plugin
-            filename="gz-sim-joint-position-controller-system"
-            name="gz::sim::systems::JointPositionController">
-            <joint_name>rg2_finger_joint1</joint_name>
-            <topic>/rg2_finger_joint1_cmd</topic>
-            <p_gain>50</p_gain>
-        </plugin>
-        <plugin
-            filename="gz-sim-joint-position-controller-system"
-            name="gz::sim::systems::JointPositionController">
-            <joint_name>rg2_finger_joint2</joint_name>
-            <topic>/rg2_finger_joint2_cmd</topic>
-            <p_gain>50</p_gain>
-        </plugin>
 
         <!-- Detachable joints for pick-and-place demo objects -->
         <plugin filename="gz-sim-detachable-joint-system"
@@ -698,8 +620,61 @@
             <output_topic>/gripper/pieza_pick_mesa/state</output_topic>
         </plugin>
         <!-- Drop objects start free (no detachable joints by default). -->
+        <ros2_control name="ur5_rg2" type="system">
+            <hardware>
+                <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+            </hardware>
+            <joint name="shoulder_pan_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="shoulder_lift_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="elbow_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="wrist_1_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="wrist_2_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="wrist_3_joint">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="rg2_finger_joint1">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="rg2_finger_joint2">
+                <command_interface name="position"/>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+        </ros2_control>
         <plugin filename="gz_ros2_control-system"
                 name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+            <robot_param>robot_description</robot_param>
+            <robot_param_node>robot_state_publisher</robot_param_node>
+            <use_sim_time>true</use_sim_time>
+            <hold_joints>false</hold_joints>
+            <ros>
+                <param name="use_sim_time">true</param>
+                <param name="hold_joints">false</param>
+            </ros>
             <parameters>models/ur5_rg2/ur5_controllers.yaml</parameters>
         </plugin>
     </model>

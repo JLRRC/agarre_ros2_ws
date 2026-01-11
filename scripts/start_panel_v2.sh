@@ -125,16 +125,22 @@ export RMW_FASTRTPS_USE_SHM="${RMW_FASTRTPS_USE_SHM:-0}"
 export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-$WS_DIR/scripts/fastdds_no_shm.xml}"
 log "GZ_SIM_RESOURCE_PATH set to: $GZ_SIM_RESOURCE_PATH"
 
-export LIBGL_ALWAYS_SOFTWARE=1
+if [[ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ]]; then
+  export LIBGL_ALWAYS_SOFTWARE=0
+fi
 export QT_XCB_GL_INTEGRATION=none
-export PANEL_SKIP_CLEANUP=1
+export PANEL_SKIP_CLEANUP="${PANEL_SKIP_CLEANUP:-0}"
+export PANEL_KILL_STALE="${PANEL_KILL_STALE:-1}"
 if [[ -z "${DISPLAY:-}" ]]; then
   export QT_QPA_PLATFORM=offscreen
 fi
+export PANEL_STALE_GRACE_SEC="${PANEL_STALE_GRACE_SEC:-20}"
+export PANEL_KEEP_CAMERAS="${PANEL_KEEP_CAMERAS:-${PANEL_CAMERA_REQUIRED:-0}}"
 
 # Preparar modelo runtime con params reales para gz_ros2_control (panel lanza gz sim directamente).
 runtime_models_root="$WS_DIR/log/gz_models"
 runtime_ur5_model="$runtime_models_root/ur5_rg2"
+rm -rf "$runtime_ur5_model" 2>/dev/null || true
 mkdir -p "$runtime_ur5_model"
 cp -a "$WS_DIR/models/ur5_rg2/." "$runtime_ur5_model/" 2>/dev/null || true
 controllers_yaml="$(python3 - <<'PY'
@@ -171,6 +177,8 @@ PANEL_START_ROS2_CONTROL="${PANEL_START_ROS2_CONTROL:-0}"
 PANEL_LAUNCH_BRIDGE="${PANEL_LAUNCH_BRIDGE:-$PANEL_START_STACK}"
 PANEL_LAUNCH_WORLD_TF="${PANEL_LAUNCH_WORLD_TF:-1}"
 PANEL_LAUNCH_SYSTEM_STATE="${PANEL_LAUNCH_SYSTEM_STATE:-1}"
+export PANEL_ALLOW_UNSETTLED_ON_TIMEOUT="${PANEL_ALLOW_UNSETTLED_ON_TIMEOUT:-1}"
+export DEBUG_LOGS_TO_STDOUT="${DEBUG_LOGS_TO_STDOUT:-0}"
 
 if [[ "${PANEL_MODE}" == "manual" ]]; then
   PANEL_START_STACK="0"
@@ -183,6 +191,29 @@ fi
 HEADLESS="true"
 if [[ "${PANEL_GZ_GUI:-0}" == "1" ]]; then
   HEADLESS="false"
+fi
+if [[ -n "${DISPLAY:-}" && -z "${PANEL_GZ_GUI:-}" ]]; then
+  HEADLESS="false"
+fi
+if [[ -z "${PANEL_CAMERA_REQUIRED:-}" ]]; then
+  if [[ "$HEADLESS" == "true" ]]; then
+    export PANEL_CAMERA_REQUIRED=0
+  else
+    export PANEL_CAMERA_REQUIRED=1
+  fi
+elif [[ -n "${DISPLAY:-}" && "${PANEL_CAMERA_REQUIRED}" == "0" ]]; then
+  export PANEL_CAMERA_REQUIRED=1
+fi
+if [[ "${PANEL_CAMERA_REQUIRED}" == "1" || "${PANEL_CAMERA_REQUIRED}" == "true" ]]; then
+  HEADLESS="false"
+fi
+
+if [[ -z "${GZ_RENDER_ENGINE:-}" ]]; then
+  if [[ "$HEADLESS" == "true" ]]; then
+    export GZ_RENDER_ENGINE="ogre2"
+  else
+    export GZ_RENDER_ENGINE="ogre"
+  fi
 fi
 
 LAUNCH_GZ="false"
@@ -232,15 +263,56 @@ else
   exit 1
 fi
 
-exec ros2 launch $LAUNCH_TARGET \
-  headless:="$HEADLESS" \
-  launch_panel:=true \
-  launch_gazebo:="$LAUNCH_GZ" \
-  launch_rsp:="$LAUNCH_RSP" \
-  launch_bridge:="$LAUNCH_BRIDGE" \
-  launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
-  launch_world_tf:="$LAUNCH_WORLD_TF" \
-  launch_system_state:="$LAUNCH_SYSTEM_STATE" \
-  panel_managed:="$PANEL_MANAGED" \
-  panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
-  panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"
+if [[ "${DEBUG_LOGS_TO_STDOUT}" == "1" ]]; then
+  exec ros2 launch $LAUNCH_TARGET \
+    headless:="$HEADLESS" \
+    launch_panel:=true \
+    launch_gazebo:="$LAUNCH_GZ" \
+    launch_rsp:="$LAUNCH_RSP" \
+    launch_bridge:="$LAUNCH_BRIDGE" \
+    launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
+    launch_world_tf:="$LAUNCH_WORLD_TF" \
+    launch_system_state:="$LAUNCH_SYSTEM_STATE" \
+    panel_managed:="$PANEL_MANAGED" \
+    panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
+    panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}"
+fi
+
+launch_log="$WS_DIR/log/ros2_launch.log"
+mkdir -p "$WS_DIR/log"
+PANEL_LOG_FILTER="${PANEL_LOG_FILTER:-0}"
+if [[ "$PANEL_LOG_FILTER" == "1" ]]; then
+  stdbuf -oL -eL ros2 launch $LAUNCH_TARGET \
+    headless:="$HEADLESS" \
+    launch_panel:=true \
+    launch_gazebo:="$LAUNCH_GZ" \
+    launch_rsp:="$LAUNCH_RSP" \
+    launch_bridge:="$LAUNCH_BRIDGE" \
+    launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
+    launch_world_tf:="$LAUNCH_WORLD_TF" \
+    launch_system_state:="$LAUNCH_SYSTEM_STATE" \
+    panel_managed:="$PANEL_MANAGED" \
+    panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
+    panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}" \
+    2>&1 \
+    | tee "$launch_log" \
+    | awk '
+        /\[STARTUP\]/ || /\[BTN\]/ { print > "/dev/stderr"; fflush("/dev/stderr") }
+        /\[ERROR\]/ || /Traceback/ || /Exception/ || /FATAL/ { print > "/dev/stderr"; fflush("/dev/stderr") }
+      '
+else
+  stdbuf -oL -eL ros2 launch $LAUNCH_TARGET \
+    headless:="$HEADLESS" \
+    launch_panel:=true \
+    launch_gazebo:="$LAUNCH_GZ" \
+    launch_rsp:="$LAUNCH_RSP" \
+    launch_bridge:="$LAUNCH_BRIDGE" \
+    launch_ros2_control:="$LAUNCH_ROS2_CONTROL" \
+    launch_world_tf:="$LAUNCH_WORLD_TF" \
+    launch_system_state:="$LAUNCH_SYSTEM_STATE" \
+    panel_managed:="$PANEL_MANAGED" \
+    panel_auto_bridge:="${PANEL_AUTO_BRIDGE:-0}" \
+    panel_auto_bridge_delay_ms:="${PANEL_AUTO_BRIDGE_DELAY_MS:-1200}" \
+    2>&1 \
+    | tee "$launch_log"
+fi

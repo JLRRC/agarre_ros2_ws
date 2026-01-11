@@ -87,6 +87,7 @@ def _prepare_runtime(context, *_args) -> List[object]:
     existing_plugin = os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")
     if existing_plugin:
         plugin_path = f"{plugin_path}:{existing_plugin}"
+    render_engine = os.environ.get("GZ_RENDER_ENGINE", "").strip() or "ogre"
     fastdds_profile = os.path.join(ws_dir, "scripts", "fastdds_no_shm.xml")
     launch_flags = [
         LaunchConfiguration("launch_gazebo").perform(context),
@@ -134,6 +135,20 @@ def _prepare_runtime(context, *_args) -> List[object]:
         if os.path.isfile(world_file):
             with open(world_file, "r", encoding="utf-8") as f:
                 world_text = f.read()
+            headless_mode = LaunchConfiguration("headless").perform(context)
+            keep_cameras = os.environ.get("PANEL_KEEP_CAMERAS", "").strip() in ("1", "true", "True")
+            if not keep_cameras:
+                keep_cameras = os.environ.get("PANEL_CAMERA_REQUIRED", "").strip() in ("1", "true", "True")
+            if str(headless_mode).lower() in ("1", "true", "yes") and not keep_cameras:
+                for cam_name in (
+                    "camera_overhead",
+                    "camera_north",
+                    "camera_south",
+                    "camera_east",
+                    "camera_west",
+                ):
+                    pattern = rf"<model\s+name=\"{cam_name}\">.*?</model>"
+                    world_text = re.sub(pattern, "", world_text, flags=re.DOTALL)
             world_text = world_text.replace(
                 "<uri>model://ur5_rg2</uri>",
                 f"<uri>file://{runtime_ur5_model}</uri>",
@@ -148,6 +163,7 @@ def _prepare_runtime(context, *_args) -> List[object]:
         SetEnvironmentVariable("GZ_PARTITION", gz_partition),
         SetEnvironmentVariable("GZ_SIM_RESOURCE_PATH", resource_path),
         SetEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", plugin_path),
+        SetEnvironmentVariable("GZ_RENDER_ENGINE", render_engine),
         SetEnvironmentVariable("UR5_CONTROLLERS_YAML", controllers_yaml),
         SetEnvironmentVariable("UR5_CONTROLLERS_FILE", controllers_yaml),
         SetEnvironmentVariable("PANEL_AUTO_BRIDGE", LaunchConfiguration("panel_auto_bridge")),
@@ -170,6 +186,7 @@ def _maybe_moveit(context, *_args) -> List[object]:
     if str(launch_moveit).lower() not in ("1", "true", "yes"):
         return []
     moveit_start_ros2_control = LaunchConfiguration("moveit_start_ros2_control")
+    use_sim_time = LaunchConfiguration("use_sim_time")
     return [
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -180,6 +197,7 @@ def _maybe_moveit(context, *_args) -> List[object]:
             launch_arguments={
                 "start_ros2_control": moveit_start_ros2_control,
                 "launch_rviz": "false",
+                "use_sim_time": use_sim_time,
             }.items(),
         )
     ]
@@ -235,8 +253,9 @@ def generate_launch_description():
     )
 
     gz_headless = ExecuteProcess(
-        cmd=["gz", "sim", "-s", "-r", "--headless-rendering", world_file],
+        cmd=["gz", "sim", "-s", "-r", "--headless-rendering", "--render-engine", "ogre2", world_file],
         output="screen",
+        additional_env={"GZ_RENDER_ENGINE": "ogre2"},
         condition=IfCondition(headless),
     )
     gz_gui = ExecuteProcess(
@@ -255,6 +274,17 @@ def generate_launch_description():
         output="screen",
         parameters=[{"config_file": LaunchConfiguration("runtime_yaml")}],
         condition=IfCondition(launch_bridge),
+    )
+
+    gz_control_guard = Node(
+        package="ur5_tools",
+        executable="gz_ros_control_guard",
+        output="screen",
+        parameters=[
+            {"use_sim_time": True},
+            {"hold_joints": False},
+        ],
+        condition=IfCondition(launch_gazebo),
     )
 
     world_tf = Node(
@@ -328,6 +358,7 @@ def generate_launch_description():
             controller_bootstrap,
             gz_group,
             bridge,
+            gz_control_guard,
             world_tf,
             system_state,
             release_service,

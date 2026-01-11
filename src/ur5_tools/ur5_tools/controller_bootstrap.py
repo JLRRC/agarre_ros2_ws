@@ -80,7 +80,12 @@ class ControllerBootstrap(Node):
         if not future.done():
             return False
         try:
-            return bool(future.result())
+            result = future.result()
+            if hasattr(result, "ok"):
+                return bool(result.ok)
+            if hasattr(result, "success"):
+                return bool(result.success)
+            return bool(result)
         except Exception:
             return False
 
@@ -104,8 +109,8 @@ class ControllerBootstrap(Node):
         req.activate_controllers = [name]
         req.deactivate_controllers = []
         req.strictness = SwitchController.Request.STRICT
-        req.start_asap = True
-        req.timeout = 2.0
+        req.activate_asap = True
+        req.timeout.sec = 2
         return self._call(self._switch_client, req, 3.0)
 
     def _configure(self, name: str) -> bool:

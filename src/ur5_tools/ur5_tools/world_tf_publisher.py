@@ -32,6 +32,8 @@ class WorldTfPublisher(Node):
         self.declare_parameter("world_frame", "world")
         self.declare_parameter("world_file", "")
         self.declare_parameter("static_grace_sec", 0.0)
+        self.declare_parameter("wait_for_clock", True)
+        self.declare_parameter("clock_ready_min_sec", 0.1)
 
         self._world_name = str(self.get_parameter("world_name").value)
         self._model_name = str(self.get_parameter("model_name").value)
@@ -39,6 +41,10 @@ class WorldTfPublisher(Node):
         self._world_frame = str(self.get_parameter("world_frame").value)
         self._world_file = str(self.get_parameter("world_file").value)
         self._static_grace = float(self.get_parameter("static_grace_sec").value)
+        self._wait_for_clock = bool(self.get_parameter("wait_for_clock").value)
+        self._clock_ready_min_ns = int(
+            float(self.get_parameter("clock_ready_min_sec").value) * 1e9
+        )
 
         self._topic = f"/world/{self._world_name}/pose/info"
         self._tf_pub = TransformBroadcaster(self)
@@ -49,6 +55,9 @@ class WorldTfPublisher(Node):
         self._last_pose = None
         self._last_pose_time = 0.0
         self._start_time = self.get_clock().now().nanoseconds * 1e-9
+        self._clock_ready = not self._wait_for_clock
+        self._clock_last_ns = 0
+        self._clock_last_log = 0.0
         self._static_pose = self._load_static_pose()
         self._sub = self.create_subscription(
             TFMessage,
@@ -66,6 +75,8 @@ class WorldTfPublisher(Node):
             self.get_logger().info(
                 "Static world pose loaded from world file; will use if pose/info has no model names."
             )
+        if self._wait_for_clock:
+            self.get_logger().info("Waiting for /clock before publishing TF.")
 
     def _name_from_tf(self, tf: TransformStamped) -> str:
         child = getattr(tf, "child_frame_id", "") or ""
@@ -220,6 +231,26 @@ class WorldTfPublisher(Node):
         self._last_stamp = tf.header.stamp if self._stamp_valid(tf) else None
 
     def _publish_timer(self) -> None:
+        if self._wait_for_clock and not self._clock_ready:
+            now_ns = self.get_clock().now().nanoseconds
+            now = now_ns * 1e-9
+            if now_ns <= 0:
+                if (now - self._clock_last_log) > 2.0:
+                    self.get_logger().warn("Esperando /clock (tiempo=0); TF bloqueado.")
+                    self._clock_last_log = now
+                return
+            if self._clock_last_ns == 0:
+                self._clock_last_ns = now_ns
+                return
+            if now_ns <= self._clock_last_ns:
+                self._clock_last_ns = now_ns
+                return
+            if (now_ns - self._clock_last_ns) < self._clock_ready_min_ns:
+                self._clock_last_ns = now_ns
+                return
+            self._clock_ready = True
+            self.get_logger().info("/clock listo; publicando TF.")
+
         if self._last_pose is None:
             now = self.get_clock().now().nanoseconds * 1e-9
             if self._static_pose is not None and (now - self._start_time) > self._static_grace:

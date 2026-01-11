@@ -38,12 +38,14 @@ def generate_launch_description():
 
     start_ros2_control = LaunchConfiguration("start_ros2_control")
     launch_rviz = LaunchConfiguration("launch_rviz")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([ur5_bringup_share, "launch", "ur5_ros2_control.launch.py"])
         ),
         condition=IfCondition(start_ros2_control),
+        launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
 
     moveit_config = (
@@ -71,6 +73,7 @@ def generate_launch_description():
         executable="move_group",
         output="screen",
         parameters=[
+            {"use_sim_time": use_sim_time},
             moveit_config.to_dict(),
         ],
     )
@@ -80,6 +83,7 @@ def generate_launch_description():
         executable="rviz2",
         output="screen",
         parameters=[
+            {"use_sim_time": use_sim_time},
             moveit_config.robot_description,
             moveit_config.robot_description_semantic,
         ],
@@ -90,6 +94,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("start_ros2_control", default_value="false"),
             DeclareLaunchArgument("launch_rviz", default_value="false"),
+            DeclareLaunchArgument("use_sim_time", default_value="true"),
             bringup_launch,
             move_group_node,
             rviz_node,

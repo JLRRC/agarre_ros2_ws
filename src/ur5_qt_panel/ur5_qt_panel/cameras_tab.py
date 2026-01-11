@@ -195,16 +195,16 @@ class ObjectListPanel(QWidget):
             return
         pickable = pickable or {}
         for name, (x, y, z) in sorted(objects.items()):
-            if not visible_table_object(name, (x, y, z)):
-                continue
+            visible = visible_table_object(name, (x, y, z))
             row = self._rows.get(name)
             if not row:
                 row = ObjectRow(name)
                 self._rows[name] = row
                 self.list_box.addWidget(row)
                 row.clicked.connect(self.selected.emit)
-            out = object_out_of_reach(x, y)
-            row.set_state(x, y, z, out, pickable.get(name, True))
+            out = object_out_of_reach(x, y) or not visible
+            pickable_flag = pickable.get(name, True) and visible
+            row.set_state(x, y, z, out, pickable_flag)
 
     def set_selected(self, name: Optional[str], text: str):
         for obj, row in self._rows.items():
