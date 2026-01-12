@@ -1,0 +1,102 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/scripts/bridge_cameras.yaml
+# Summary: Base ros_gz_bridge mapping for RGB and depth camera topics.
+# bridge_cameras.yaml  (BASE)
+# OJO: El /clock lo genera el panel en un YAML runtime con el nombre real del world.
+# Aquí dejamos SOLO cámaras RGB + depth (GZ_TO_ROS).
+
+- ros_topic_name: /camera_overhead/image
+  gz_topic_name: /camera_overhead/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_north/image
+  gz_topic_name: /camera_north/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_south/image
+  gz_topic_name: /camera_south/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_east/image
+  gz_topic_name: /camera_east/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_west/image
+  gz_topic_name: /camera_west/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_lateral/image
+  gz_topic_name: /camera_lateral/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+# depth_image
+- ros_topic_name: /camera_overhead/depth_image
+  gz_topic_name: /camera_overhead/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_north/depth_image
+  gz_topic_name: /camera_north/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_south/depth_image
+  gz_topic_name: /camera_south/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_east/depth_image
+  gz_topic_name: /camera_east/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_west/depth_image
+  gz_topic_name: /camera_west/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- ros_topic_name: /camera_lateral/depth_image
+  gz_topic_name: /camera_lateral/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+# UR5 arm joint trajectory (ROS -> GZ)
+- ros_topic_name: /ur5_arm_joint_trajectory
+  gz_topic_name: /model/ur5_rg2/joint_trajectory
+  ros_type_name: trajectory_msgs/msg/JointTrajectory
+  gz_type_name: gz.msgs.JointTrajectory
+  direction: ROS_TO_GZ
+
+# RG2 gripper joint position commands (ROS -> GZ)
+- ros_topic_name: /rg2_finger_joint1_cmd
+  gz_topic_name: /rg2_finger_joint1_cmd
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /rg2_finger_joint2_cmd
+  gz_topic_name: /rg2_finger_joint2_cmd
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+
+
+

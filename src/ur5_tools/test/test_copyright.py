@@ -1,4 +1,7 @@
+# URL: /home/laboratorio/TFM/agarre_ros2_ws/src/ur5_tools/test/test_copyright.py
+# Summary: Ament copyright linter test.
 # Copyright 2015 Open Source Robotics Foundation, Inc.
+"""Ament copyright linter test."""
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
