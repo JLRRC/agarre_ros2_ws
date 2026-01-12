@@ -946,10 +946,10 @@ def load_object_positions() -> None:
                         and all(isinstance(v, (int, float)) for v in vals)
                     ):
                         OBJECT_POSITIONS[name] = (float(vals[0]), float(vals[1]), float(vals[2]))
-                if "pieza_pick_mesa" in data and "pick_demo" not in data:
-                    OBJECT_POSITIONS["pick_demo"] = OBJECT_POSITIONS["pieza_pick_mesa"]
-                if "pieza_pick_mesa" in OBJECT_POSITIONS and "pick_demo" in OBJECT_POSITIONS:
-                    OBJECT_POSITIONS.pop("pieza_pick_mesa", None)
+                if "pick_demo" in data and "pieza_pick_mesa" not in data:
+                    OBJECT_POSITIONS["pieza_pick_mesa"] = OBJECT_POSITIONS["pick_demo"]
+                if "pick_demo" in OBJECT_POSITIONS and "pieza_pick_mesa" in OBJECT_POSITIONS:
+                    OBJECT_POSITIONS.pop("pick_demo", None)
     except Exception:
         pass
 

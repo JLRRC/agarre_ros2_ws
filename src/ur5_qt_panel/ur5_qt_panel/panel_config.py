@@ -22,9 +22,9 @@ VISION_PLOTS_DIR = os.path.join(VISION_EXP_DIR, "plots")
 VISION_SUMMARY = os.path.join(VISION_EXP_DIR, "summary_base.csv")
 VISION_FIG_DIR = os.path.join(VISION_EXP_DIR, "figures_memoria")
 
-TABLE_SIZE_X = 1.20
+TABLE_SIZE_X = 0.768
 TABLE_SIZE_Y = 0.80
-TABLE_CENTER_X = 0.0
+TABLE_CENTER_X = -0.17
 TABLE_CENTER_Y = 0.0
 TABLE_IMAGE_SWAP_XY = True
 TABLE_IMAGE_FLIP_X = True
@@ -46,10 +46,10 @@ UR5_BASE_Z = 0.0
 UR5_REACH_RADIUS = 0.85
 
 TABLE_OBJECTS = {
-    "cubo_rojo": (0.15, 0.10, 0.80),
-    "cilindro_verde": (-0.10, 0.05, 0.80),
-    "caja_azul": (0.00, -0.15, 0.80),
-    "pieza_pick_mesa": (-0.45, 0.00, 0.81),
+    "cubo_rojo": (-0.02, 0.10, 0.80),
+    "cilindro_verde": (-0.27, 0.05, 0.80),
+    "caja_azul": (-0.17, -0.15, 0.80),
+    "pieza_pick_mesa": (-0.42, 0.00, 0.81),
 }
 ATTACHABLE_OBJECTS = (
     "cubo_rojo",
@@ -58,16 +58,16 @@ ATTACHABLE_OBJECTS = (
     "pieza_pick_mesa",
 )
 EXTRA_OBJECTS = {
-    "drop_obj_01_box_cube": (0.000, 0.000, 1.925),
-    "drop_obj_02_box_flat": (0.040, 0.000, 1.925),
-    "drop_obj_03_box_tall": (-0.040, 0.000, 1.925),
-    "drop_obj_04_cyl_long": (0.000, 0.040, 1.925),
-    "drop_obj_05_cyl_mid": (0.000, -0.040, 1.925),
-    "drop_obj_06_cyl_puck": (0.050, 0.050, 1.925),
-    "drop_obj_07_box_lightblue": (-0.050, 0.050, 1.925),
-    "drop_obj_08_cyl_green": (0.050, -0.050, 1.925),
-    "drop_obj_09_box_bar": (-0.050, -0.050, 1.925),
-    "drop_obj_10_cross": (0.080, 0.000, 1.925),
+    "box_red": (-0.170, 0.000, 1.925),
+    "box_blue": (-0.130, 0.000, 1.925),
+    "box_green": (-0.210, 0.000, 1.925),
+    "cyl_gray": (-0.170, 0.040, 1.925),
+    "cyl_orange": (-0.170, -0.040, 1.925),
+    "cyl_purple": (-0.120, 0.050, 1.925),
+    "box_lightblue": (-0.220, 0.050, 1.925),
+    "cyl_green": (-0.120, -0.050, 1.925),
+    "box_yellow": (-0.220, -0.050, 1.925),
+    "cross_cyan": (-0.090, 0.000, 1.925),
 }
 OBJECT_POSITIONS = {**TABLE_OBJECTS, **EXTRA_OBJECTS}
 DYNAMIC_OBJECTS = set(OBJECT_POSITIONS.keys())
@@ -76,16 +76,16 @@ OBJECT_COLORS = {
     "cilindro_verde": "#22c55e",
     "caja_azul": "#3b82f6",
     "pieza_pick_mesa": "#f59e0b",
-    "drop_obj_01_box_cube": "#f97316",
-    "drop_obj_02_box_flat": "#a855f7",
-    "drop_obj_03_box_tall": "#14b8a6",
-    "drop_obj_04_cyl_long": "#22c55e",
-    "drop_obj_05_cyl_mid": "#06b6d4",
-    "drop_obj_06_cyl_puck": "#84cc16",
-    "drop_obj_07_box_lightblue": "#93c5fd",
-    "drop_obj_08_cyl_green": "#22c55e",
-    "drop_obj_09_box_bar": "#10b981",
-    "drop_obj_10_cross": "#06b6d4",
+    "box_red": "#f97316",
+    "box_blue": "#a855f7",
+    "box_green": "#14b8a6",
+    "cyl_gray": "#22c55e",
+    "cyl_orange": "#06b6d4",
+    "cyl_purple": "#84cc16",
+    "box_lightblue": "#93c5fd",
+    "cyl_green": "#22c55e",
+    "box_yellow": "#10b981",
+    "cross_cyan": "#06b6d4",
 }
 
 BASKET_DROP = (-1.30, 0.00, 0.82)

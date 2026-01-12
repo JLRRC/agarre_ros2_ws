@@ -204,6 +204,8 @@ class ObjectListPanel(QWidget):
                 row.clicked.connect(self.selected.emit)
             out = object_out_of_reach(x, y) or not visible
             pickable_flag = pickable.get(name, True) and visible
+            if pickable.get(name) is True:
+                out = False
             row.set_state(x, y, z, out, pickable_flag)
 
     def set_selected(self, name: Optional[str], text: str):

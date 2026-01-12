@@ -1,71 +1,71 @@
 {
   "cubo_rojo": [
-    0.15,
+    -0.02,
     0.1,
     0.8
   ],
   "cilindro_verde": [
-    -0.1,
+    -0.27,
     0.05,
     0.8
   ],
   "caja_azul": [
-    0.0,
+    -0.17,
     -0.15,
     0.8
   ],
   "pieza_pick_mesa": [
-    -0.45,
+    -0.42,
     0.0,
     0.81
   ],
-  "drop_obj_01_box_cube": [
-    0.0,
+  "box_red": [
+    -0.17,
     0.0,
     1.925
   ],
-  "drop_obj_02_box_flat": [
+  "box_blue": [
+    -0.13,
+    0.0,
+    1.925
+  ],
+  "box_green": [
+    -0.21,
+    0.0,
+    1.925
+  ],
+  "cyl_gray": [
+    -0.17,
     0.04,
-    0.0,
     1.925
   ],
-  "drop_obj_03_box_tall": [
-    -0.04,
-    0.0,
-    1.925
-  ],
-  "drop_obj_04_cyl_long": [
-    0.0,
-    0.04,
-    1.925
-  ],
-  "drop_obj_05_cyl_mid": [
-    0.0,
+  "cyl_orange": [
+    -0.17,
     -0.04,
     1.925
   ],
-  "drop_obj_06_cyl_puck": [
-    0.05,
-    0.05,
-    1.925
-  ],
-  "drop_obj_07_box_lightblue": [
-    -0.05,
+  "cyl_purple": [
+    -0.12,
     0.05,
     1.925
   ],
-  "drop_obj_08_cyl_green": [
+  "box_lightblue": [
+    -0.22,
     0.05,
+    1.925
+  ],
+  "cyl_green": [
+    -0.12,
     -0.05,
     1.925
   ],
-  "drop_obj_09_box_bar": [
-    -0.05,
+  "box_yellow": [
+    -0.22,
     -0.05,
     1.925
   ],
-  "drop_obj_10_cross": [
-    0.08,
+  "cross_cyan": [
+    -0.09,
     0.0,
     1.925
   ]

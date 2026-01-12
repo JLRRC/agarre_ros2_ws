@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import json
+import xml.etree.ElementTree as ET
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
@@ -83,6 +84,7 @@ from .panel_config import (
     UR5_BASE_X,
     UR5_BASE_Y,
     UR5_BASE_Z,
+    UR5_REACH_RADIUS,
     UR5_CONTROLLERS_YAML,
     UR5_MODEL_NAME,
     BASKET_DROP,
@@ -114,6 +116,7 @@ from .panel_utils import (
     nearest_table_object,
     object_out_of_reach,
     resolve_gz_partition,
+    get_object_pose_gz,
     rotate_log,
     set_led,
     table_xy_to_pixel,
@@ -148,7 +151,15 @@ except Exception:
     Parameter = None
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from std_srvs.srv import Trigger
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Empty
+try:
+    from visualization_msgs.msg import Marker
+    from geometry_msgs.msg import Point
+    from builtin_interfaces.msg import Duration
+except Exception:
+    Marker = None
+    Point = None
+    Duration = None
 try:
     from controller_manager_msgs.srv import ListControllers
 except Exception:
@@ -175,6 +186,7 @@ MOVEIT_READY_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_READY_TIMEOUT_SEC"
 GZ_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_GZ_LAUNCH_TIMEOUT_SEC", "20.0"))
 BRIDGE_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_BRIDGE_LAUNCH_TIMEOUT_SEC", "12.0"))
 MOVEIT_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_LAUNCH_TIMEOUT_SEC", "25.0"))
+MOVEIT_BRIDGE_LAUNCH_TIMEOUT_SEC = float(os.environ.get("PANEL_MOVEIT_BRIDGE_LAUNCH_TIMEOUT_SEC", "15.0"))
 CONTROLLER_DROP_GRACE_SEC = float(os.environ.get("PANEL_CTRL_DROP_GRACE_SEC", "3.0"))
 TRACE_PRINT_PERIOD_SEC = float(os.environ.get("PANEL_TRACE_PRINT_PERIOD_SEC", "3.0"))
 DEBUG_POSES_PERIOD_SEC = float(os.environ.get("PANEL_DEBUG_POSES_PERIOD_SEC", "3.0"))
@@ -209,16 +221,16 @@ class MoveItState(Enum):
     READY = "READY"
     ERROR = "ERROR"
 DROP_OBJECT_NAMES = [
-    "drop_obj_01_box_cube",
-    "drop_obj_02_box_flat",
-    "drop_obj_03_box_tall",
-    "drop_obj_04_cyl_long",
-    "drop_obj_05_cyl_mid",
-    "drop_obj_06_cyl_puck",
-    "drop_obj_07_sphere_big",
-    "drop_obj_08_sphere_small",
-    "drop_obj_09_box_bar",
-    "drop_obj_10_cross",
+    "box_red",
+    "box_blue",
+    "box_green",
+    "cyl_gray",
+    "cyl_orange",
+    "cyl_purple",
+    "box_lightblue",
+    "cyl_green",
+    "box_yellow",
+    "cross_cyan",
 ]
 OBJECT_SETTLE_Z_EPS = 0.002
 OBJECT_FALL_Z_EPS = 0.01
@@ -226,7 +238,7 @@ OBJECT_SETTLE_WINDOW_SEC = 1.0
 OBJECT_SETTLE_POLL_SEC = 0.6
 OBJECT_SETTLE_TIMEOUT_SEC = 10.0
 OBJECT_SETTLE_XY_EPS = 0.002
-SETTLE_PATTERNS = ("drop_obj_",)
+SETTLE_PATTERNS = ("box_", "cyl_", "cross_")
 SETTLE_MANUAL = {"cubo_rojo", "cilindro_verde", "caja_azul", "pieza_pick_mesa"}
 ALLOW_UNSETTLED_ON_TIMEOUT = bool(int(os.environ.get("PANEL_ALLOW_UNSETTLED_ON_TIMEOUT", "0")))
 CAMERA_READY_FRAMES = int(os.environ.get("PANEL_CAMERA_READY_FRAMES", "3"))
@@ -332,6 +344,17 @@ PRE_GRASP_POSE_DATA = _make_pose_data((0.28, -0.10, 0.35))
 GRASP_POSE_DATA = _make_pose_data((0.28, -0.10, 0.20))
 TRANSPORT_POSE_DATA = _make_pose_data((0.48, 0.10, 0.40))
 DROP_POSE_DATA = _make_pose_data((0.48, 0.20, 0.33))
+PICK_DEMO_OBJECT_NAME = "pieza_pick_mesa"
+PICK_DEMO_PRE_GRASP_Z_OFFSET = float(os.environ.get("PANEL_PICK_DEMO_PRE_GRASP_Z", "0.15"))
+PICK_DEMO_GRASP_Z_OFFSET = float(os.environ.get("PANEL_PICK_DEMO_GRASP_Z", "0.02"))
+PICK_DEMO_TRANSPORT_Z_OFFSET = float(os.environ.get("PANEL_PICK_DEMO_TRANSPORT_Z", "0.28"))
+PICK_DEMO_DROP_Z_OFFSET = float(os.environ.get("PANEL_PICK_DEMO_DROP_Z", "0.05"))
+AUTO_CALIB_FROM_CAMERA = bool(int(os.environ.get("PANEL_CALIB_AUTO", "1")))
+REACH_OVERLAY_Z = float(os.environ.get("PANEL_REACH_OVERLAY_Z", "0.775"))
+REACH_OVERLAY_POINTS = int(os.environ.get("PANEL_REACH_OVERLAY_POINTS", "72"))
+CALIB_GRID_STEP = float(os.environ.get("PANEL_CALIB_GRID_STEP", "0.05"))
+PICKABLE_PRE_GRASP_Z = float(os.environ.get("PANEL_PICKABLE_PRE_GRASP_Z", "0.12"))
+PICKABLE_MIN_CLEARANCE = float(os.environ.get("PANEL_PICKABLE_MIN_CLEARANCE", "0.05"))
 PICK_SEQUENCE = [
     ("PRE_GRASP", PRE_GRASP_POSE_DATA, 0.6),
     ("GRASP", GRASP_POSE_DATA, 0.8),
@@ -533,6 +556,9 @@ class ControlPanelV2(QMainWindow):
         self._bridge_launch_start = 0.0
         self._moveit_launching = False
         self._moveit_launch_start = 0.0
+        self._moveit_bridge_launching = False
+        self._moveit_bridge_launch_start = 0.0
+        self._star_inflight = False
         self._controller_spawn_last_start = 0.0
         self._tf_ready_timer: Optional[QTimer] = None
         self._tf_ready_last_notice = 0.0
@@ -588,6 +614,7 @@ class ControlPanelV2(QMainWindow):
         self._moveit_pose_pub = None
         self._gripper_pub = None
         self._gripper_topic = ""
+        self._attach_pubs: Dict[str, object] = {}
         self._traj_pub = None
         self._traj_topic = ""
         self._traj_action_client = None
@@ -683,8 +710,17 @@ class ControlPanelV2(QMainWindow):
         self._camera_ready_frames = max(1, CAMERA_READY_FRAMES)
         self._calibrating = False
         self._calib_points = []  # Lista de (px, py, wx, wy)
+        self._calib_grid_until = 0.0
         self._auto_joint2_move_done = False
         self._selected_object = None  # Objeto seleccionado para pick
+        self._reach_overlay_enabled = False
+        self._reach_overlay_points: List[Tuple[int, int]] = []
+        self._reach_overlay_size: Tuple[int, int] = (0, 0)
+        self._pickable_map_override: Optional[Dict[str, bool]] = None
+        self._sdf_model_cache: Dict[str, Dict[str, object]] = {}
+        self._table_top_z: Optional[float] = None
+        self._last_camera_frame: Optional[Tuple[object, int, int, float]] = None
+        self._marker_pub = None
         self._controller_check_inflight = False
         self._controllers_ok = False
         self._controllers_reason = "controladores no verificados"
@@ -868,6 +904,105 @@ class ControlPanelV2(QMainWindow):
                 self._log(f"[Panel] ERROR creando publisher gripper: {exc}")
                 self._gripper_pub = None
         return self._gripper_pub
+
+    def _get_attach_publisher(self, topic: str):
+        if self._moveit_node is None:
+            return None
+        pub = self._attach_pubs.get(topic)
+        if pub is not None:
+            return pub
+        try:
+            pub = self._moveit_node.create_publisher(Empty, topic, 10)
+            self._attach_pubs[topic] = pub
+            return pub
+        except Exception as exc:
+            self._log(f"[Panel] ERROR creando publisher attach: {exc}")
+            return None
+
+    @staticmethod
+    def _normalize_attach_name(name: str) -> str:
+        if name == "pick_demo":
+            return "pieza_pick_mesa"
+        return name
+
+    def _find_attach_candidate(self) -> Optional[str]:
+        if not self._last_tcp_world:
+            return None
+        positions = get_object_positions()
+        if not positions:
+            return None
+        tcp_x, tcp_y, tcp_z = self._last_tcp_world
+        if self._selected_object:
+            selected_name = self._selected_object
+            pos = positions.get(selected_name)
+            if pos is None and selected_name == "pieza_pick_mesa":
+                pos = positions.get("pick_demo")
+            if pos is None and selected_name == "pick_demo":
+                pos = positions.get("pieza_pick_mesa")
+            if pos is not None:
+                dx = pos[0] - tcp_x
+                dy = pos[1] - tcp_y
+                dz = pos[2] - tcp_z
+                if (dx * dx + dy * dy + dz * dz) ** 0.5 <= ATTACH_DIST_M:
+                    return self._normalize_attach_name(selected_name)
+        best_name = None
+        best_dist = 1e9
+        for name, pos in positions.items():
+            dx = pos[0] - tcp_x
+            dy = pos[1] - tcp_y
+            dz = pos[2] - tcp_z
+            dist = (dx * dx + dy * dy + dz * dz) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        if best_name and best_dist <= ATTACH_DIST_M:
+            return self._normalize_attach_name(best_name)
+        return None
+
+    def _attempt_attach(self, reason: str) -> bool:
+        if not ROS_AVAILABLE or self._moveit_node is None:
+            self._log_warning(f"[PICK] attach no disponible (ROS no listo): {reason}")
+            return False
+        candidate = self._find_attach_candidate()
+        if not candidate:
+            self._set_status("Pick: objeto fuera de rango para attach", error=False)
+            return False
+        topic = f"{GRIPPER_ATTACH_PREFIX}/{candidate}/attach"
+        pub = self._get_attach_publisher(topic)
+        if pub is None:
+            self._set_status("Pick: attach no disponible", error=True)
+            return False
+        pub.publish(Empty())
+        self._set_status(f"Pick: attach enviado ({candidate})", error=False)
+        return True
+
+    def _schedule_attach_attempt(self, reason: str, delay_ms: int = 150) -> None:
+        QTimer.singleShot(delay_ms, lambda: self._attempt_attach(reason))
+
+    def _command_gripper(self, closed: bool, *, log_action: str = "Gripper") -> bool:
+        if not self._require_manual_ready("Gripper"):
+            return False
+        self._gripper_closed = closed
+        if self.btn_gripper is not None:
+            self.btn_gripper.blockSignals(True)
+            self.btn_gripper.setChecked(closed)
+            self.btn_gripper.setText("Abrir gripper" if closed else "Cerrar gripper")
+            self.btn_gripper.blockSignals(False)
+        if log_action:
+            self._log_button(f"{log_action} {'cerrar' if closed else 'abrir'}")
+        if self._moveit_node is None:
+            self._init_moveit_publisher()
+        pub = self._get_gripper_publisher(GRIPPER_CMD_TOPIC)
+        if pub is None:
+            self._set_status("Gripper: publisher no disponible", error=True)
+            self._log_warning("[GRIPPER] Publisher no disponible")
+            return False
+        target = GRIPPER_CLOSED_RAD if closed else GRIPPER_OPEN_RAD
+        msg = Float64MultiArray()
+        msg.data = [float(target), float(target) * GRIPPER_JOINT2_SIGN]
+        pub.publish(msg)
+        self._set_status(f"Gripper -> {target:.3f} rad", error=False)
+        return True
 
     def _traj_action_target(self, traj_topic: str) -> str:
         if not traj_topic:
@@ -1266,7 +1401,7 @@ class ControlPanelV2(QMainWindow):
                 require_fall = any(name.startswith(p) for p in SETTLE_PATTERNS)
                 if not require_fall:
                     has_fallen[name] = True
-                if hand_pos and name.startswith("drop_obj_"):
+                if hand_pos and name in DROP_OBJECT_NAMES:
                     dxh = x - hand_pos[0]
                     dyh = y - hand_pos[1]
                     dzh = z - hand_pos[2]
@@ -1349,9 +1484,11 @@ class ControlPanelV2(QMainWindow):
         top = QHBoxLayout()
         top.setSpacing(6)
 
-        self.btn_kill_hard = QPushButton("KILL HARD")
+        self.btn_kill_hard = QPushButton("STOP")
         self.btn_kill_hard.setToolTip("Uso manual de emergencia (kill_all.sh)")
-        self.btn_close_terminal = QPushButton("Cerrar Terminal")
+        self.btn_star = QPushButton("START")
+        self.btn_star.setToolTip("Arranque automático: Gazebo, bridge, MoveIt y bridge MoveIt")
+        self.btn_close_terminal = QPushButton("EXIT")
         self.btn_debug_joints = QPushButton("Debug joints/poses → terminal")
         self.btn_debug_joints.setCheckable(True)
         self.btn_debug_logs = QPushButton("Debug logs → terminal")
@@ -1360,7 +1497,8 @@ class ControlPanelV2(QMainWindow):
         self._apply_debug_button_style(self.btn_debug_joints, self._debug_joints_to_stdout)
         self._apply_debug_button_style(self.btn_debug_logs, self._debug_logs_enabled)
 
-        self.btn_kill_hard.clicked.connect(lambda: self._debounced_btn_action(self.btn_kill_hard, lambda: self._run_script("kill_all.sh", "KILL HARD")))
+        self.btn_kill_hard.clicked.connect(lambda: self._debounced_btn_action(self.btn_kill_hard, self._stop_all))
+        self.btn_star.clicked.connect(lambda: self._debounced_btn_action(self.btn_star, self._start_all))
         self.btn_close_terminal.clicked.connect(self._close_terminal)
         self.btn_debug_logs.clicked.connect(lambda: self._toggle_debug("DEBUG_LOGS_TO_STDOUT"))
 
@@ -1459,12 +1597,14 @@ class ControlPanelV2(QMainWindow):
 
         for btn in (
             self.btn_kill_hard,
+            self.btn_star,
             self.btn_close_terminal,
             self.btn_debug_joints,
             self.btn_debug_logs,
         ):
             btn.setMinimumHeight(32)
 
+        top.addWidget(self.btn_star)
         top.addWidget(self.btn_kill_hard)
         top.addWidget(self.btn_close_terminal)
         top.addWidget(self.btn_debug_joints)
@@ -1539,7 +1679,7 @@ class ControlPanelV2(QMainWindow):
         status_grid.addWidget(self.led_ros2, 2, 1)
         status_grid.addWidget(QLabel("UR5 (sim)"), 2, 2)
         status_grid.addWidget(self.led_ur5, 2, 3)
-        self.lbl_moveit_status = QLabel("MoveIt (OFF)")
+        self.lbl_moveit_status = QLabel("MoveIt")
         status_grid.addWidget(self.lbl_moveit_status, 3, 0)
         status_grid.addWidget(self.led_moveit, 3, 1)
         self.lbl_moveit_bridge_status = QLabel("MoveIt bridge")
@@ -1812,11 +1952,13 @@ class ControlPanelV2(QMainWindow):
         robot_layout.setContentsMargins(6, 8, 6, 6)
         robot_layout.setSpacing(6)
 
+        self.btn_test_robot = QPushButton("TEST ROBOT")
         self.btn_home = QPushButton("UR5 → HOME")
         self.btn_table = QPushButton("UR5 → Mesa")
         self.btn_basket = QPushButton("UR5 → Cesta")
-        for b in (self.btn_home, self.btn_table, self.btn_basket):
+        for b in (self.btn_test_robot, self.btn_home, self.btn_table, self.btn_basket):
             b.setMinimumHeight(32)
+        self.btn_test_robot.clicked.connect(self._run_robot_test)
         self.btn_home.clicked.connect(self._go_home)
         self.btn_table.clicked.connect(self._go_table)
         self.btn_basket.clicked.connect(self._go_basket)
@@ -1825,6 +1967,7 @@ class ControlPanelV2(QMainWindow):
         self.btn_pick_demo.setMinimumHeight(32)
         self.btn_pick_demo.clicked.connect(self._run_pick_demo)
 
+        robot_layout.addWidget(self.btn_test_robot)
         robot_layout.addWidget(self.btn_home)
         robot_layout.addWidget(self.btn_table)
         robot_layout.addWidget(self.btn_basket)
@@ -2938,11 +3081,14 @@ class ControlPanelV2(QMainWindow):
         if not frame:
             return
         topic, qimg, w, h, fps, ts = frame
+        self._last_camera_frame = (qimg, w, h, ts)
         display = qimg
         if w > 0 and h > 0:
-            if self._calibrating:
+            if self._calibrating or (time.time() <= self._calib_grid_until):
                 display = self._draw_calib_overlay(display, w, h)
-            elif self._selected_px:
+            if self._reach_overlay_enabled:
+                display = self._draw_reach_overlay(display, w, h)
+            if self._selected_px:
                 display = self._draw_selection_overlay(display, w, h)
         self.camera_view.set_frame(display, w, h)
         self.camera_info.setText(f"Conectado · {w}x{h} · fps {fps:.1f}")
@@ -3219,6 +3365,73 @@ class ControlPanelV2(QMainWindow):
         label = "ON" if enabled else "OFF"
         self._log_button(f"Toggle {env_var} -> {label}")
         self._set_status(f"{env_var} -> {label}")
+
+    def _start_all(self):
+        if self._block_if_managed("START"):
+            return
+        self._log_button("START")
+        if not self._moveit_required:
+            self._moveit_required = True
+            self._emit_log("[AUTO] MoveIt requerido activado (START)")
+            self.signal_refresh_controls.emit()
+        self._star_inflight = True
+        self.btn_star.setEnabled(False)
+        self.btn_kill_hard.setEnabled(True)
+
+        def worker():
+            if self._gazebo_state() == "GAZEBO_OFF":
+                QTimer.singleShot(0, self._start_gazebo)
+            deadline = time.monotonic() + 35.0
+            while time.monotonic() < deadline:
+                if self._gazebo_state() != "GAZEBO_OFF":
+                    break
+                time.sleep(0.4)
+            QTimer.singleShot(0, self._start_bridge)
+            QTimer.singleShot(200, self._start_release_service)
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                if self._bridge_running:
+                    break
+                time.sleep(0.4)
+            QTimer.singleShot(0, self._start_moveit)
+            deadline = time.monotonic() + 40.0
+            while time.monotonic() < deadline:
+                if self._moveit_state == MoveItState.READY:
+                    break
+                time.sleep(0.4)
+            QTimer.singleShot(0, self._start_moveit_bridge)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_all(self):
+        self._log_button("STOP")
+        self._star_inflight = False
+        self.btn_kill_hard.setEnabled(False)
+        self._run_script("kill_all.sh", "STOP")
+        self._schedule_start_enable_check()
+
+    def _system_running(self) -> bool:
+        if self._proc_alive(self.gz_proc) or self._proc_alive(self.bridge_proc):
+            return True
+        if self._proc_alive(self.moveit_proc) or self._proc_alive(self.moveit_bridge_proc):
+            return True
+        if self._proc_alive(self.bag_proc) or self._proc_alive(self.rsp_proc):
+            return True
+        if self._gazebo_state() != "GAZEBO_OFF":
+            return True
+        if self._bridge_running or self._moveit_state != MoveItState.OFF:
+            return True
+        return False
+
+    def _schedule_start_enable_check(self, delay_ms: int = 1200) -> None:
+        def _check():
+            if not self._system_running():
+                self.btn_star.setEnabled(True)
+                self.btn_kill_hard.setEnabled(False)
+                return
+            QTimer.singleShot(delay_ms, _check)
+
+        QTimer.singleShot(delay_ms, _check)
 
     def _start_gazebo(self):
         if self._block_if_managed("Start Gazebo"):
@@ -4156,6 +4369,10 @@ class ControlPanelV2(QMainWindow):
         self._log_button("Start MoveIt bridge")
         if self._moveit_state != MoveItState.READY:
             self._log_warning("MoveIt no está activo; el bridge puede fallar")
+        self._moveit_bridge_launching = True
+        self._moveit_bridge_launch_start = time.time()
+        self._set_launching_style(self.btn_moveit_bridge_start, True)
+        self.btn_moveit_bridge_start.setEnabled(False)
         try:
             ensure_dir(LOG_DIR)
             bridge_log = os.path.join(LOG_DIR, "moveit_bridge.log")
@@ -4174,10 +4391,12 @@ class ControlPanelV2(QMainWindow):
             set_led(self.led_moveit_bridge, "on")
             self._set_status("MoveIt bridge lanzado")
             self._refresh_controls()
+            QTimer.singleShot(800, self._clear_moveit_bridge_launching)
         except Exception as exc:
             self._set_status(f"Error lanzando MoveIt bridge: {exc}", error=True)
             set_led(self.led_moveit_bridge, "error")
             self._moveit_bridge_running = False
+            self._clear_moveit_bridge_launching()
 
     def _stop_moveit_bridge(self):
         if self._block_if_managed("Stop MoveIt bridge"):
@@ -4189,6 +4408,12 @@ class ControlPanelV2(QMainWindow):
         self._moveit_bridge_running = False
         set_led(self.led_moveit_bridge, "off")
         self._refresh_controls()
+
+    def _clear_moveit_bridge_launching(self):
+        self._moveit_bridge_launching = False
+        self._moveit_bridge_launch_start = 0.0
+        self._set_launching_style(self.btn_moveit_bridge_start, False)
+        self.signal_refresh_controls.emit()
 
     def _kill_proc(self, proc, label: str):
         if proc is None:
@@ -4504,12 +4729,12 @@ class ControlPanelV2(QMainWindow):
     def _update_moveit_status_label(self) -> None:
         if self.lbl_moveit_status is not None:
             state_label = self._moveit_state.value
-            self.lbl_moveit_status.setText(f"MoveIt ({state_label})")
+            self.lbl_moveit_status.setText("MoveIt")
             reason = self._moveit_state_reason or state_label
             self.lbl_moveit_status.setToolTip(f"{state_label}: {reason}")
         if self.lbl_moveit_bridge_status is not None:
             bridge_label = "ON" if self._moveit_bridge_running else "OFF"
-            self.lbl_moveit_bridge_status.setText(f"MoveIt bridge ({bridge_label})")
+            self.lbl_moveit_bridge_status.setText("MoveIt bridge")
 
     def _update_system_stats(self):
         """Actualizar labels de CPU/RAM/Load, tolerando ausencia de psutil."""
@@ -4668,6 +4893,10 @@ class ControlPanelV2(QMainWindow):
             self._moveit_launching = False
             self._moveit_launch_start = 0.0
             self._set_launching_style(self.btn_moveit_start, False)
+        if self._moveit_bridge_launching and self._clear_launching_if_timeout("MoveIt bridge", self._moveit_bridge_launch_start, MOVEIT_BRIDGE_LAUNCH_TIMEOUT_SEC):
+            self._moveit_bridge_launching = False
+            self._moveit_bridge_launch_start = 0.0
+            self._set_launching_style(self.btn_moveit_bridge_start, False)
         if self._managed_mode:
             if self._external_state_active():
                 self._apply_external_system_state()
@@ -4743,6 +4972,19 @@ class ControlPanelV2(QMainWindow):
         else:
             self.btn_moveit_bridge_start.setEnabled(moveit_bridge_enabled and not self._moveit_bridge_detected())
             self.btn_moveit_bridge_stop.setEnabled(moveit_bridge_proc_alive)
+        if self._moveit_bridge_launching:
+            self._set_launching_style(self.btn_moveit_bridge_start, True)
+            self.btn_moveit_bridge_start.setEnabled(False)
+        else:
+            self._set_launching_style(self.btn_moveit_bridge_start, False)
+
+        if self._managed_mode:
+            self.btn_star.setEnabled(False)
+            self.btn_kill_hard.setEnabled(False)
+        else:
+            running = self._system_running()
+            self.btn_star.setEnabled((not running) and (not self._star_inflight))
+            self.btn_kill_hard.setEnabled(running or self._star_inflight)
         
         # Habilitar/deshabilitar controles dependiendo del estado del bridge
         # Cámara: habilitada solo cuando el bridge está activo
@@ -4750,10 +4992,11 @@ class ControlPanelV2(QMainWindow):
         self.camera_topic_combo.setEnabled(camera_enabled)
         self.btn_camera_refresh.setEnabled(camera_enabled)
         self.btn_camera_connect.setEnabled(camera_enabled)
+        calib_settled_ok = self._objects_settled or AUTO_CALIB_FROM_CAMERA
         self.btn_calibrate.setEnabled(
             camera_enabled
             and not system_error
-            and self._objects_settled
+            and calib_settled_ok
             and self._camera_stream_ok
             and self._pose_info_ok
             and self._tf_ready_state
@@ -4777,6 +5020,7 @@ class ControlPanelV2(QMainWindow):
         # Botones de movimiento: control directo (sin MoveIt)
         motion_enabled = self._manual_control_ready() and not self._script_motion_active
         motion_tip = "" if motion_enabled else f"Bloqueado: {basic_reason}"
+        self._set_btn_state(self.btn_test_robot, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_home, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_table, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_basket, motion_enabled, motion_tip)
@@ -4914,6 +5158,7 @@ class ControlPanelV2(QMainWindow):
             slider.setEnabled(False)
 
         # Botones de movimiento (bloqueados hasta bridge)
+        self.btn_test_robot.setEnabled(False)
         self.btn_home.setEnabled(False)
         self.btn_table.setEnabled(False)
         self.btn_basket.setEnabled(False)
@@ -4923,7 +5168,7 @@ class ControlPanelV2(QMainWindow):
         # Debug y otros
         self.btn_debug_joints.setEnabled(True)
         self.btn_debug_logs.setEnabled(True)
-        self.btn_kill_hard.setEnabled(True)
+        self.btn_kill_hard.setEnabled(False)
         self.btn_close_terminal.setEnabled(True)
 
     def _effective_mode(self) -> str:
@@ -4974,15 +5219,20 @@ class ControlPanelV2(QMainWindow):
         target[1] = -offset
 
         def worker():
-            self._log(f"[AUTO] Ajuste joint2=-20% desde HOME -> {target[1]:.3f} rad")
-            ok, info = self._publish_joint_trajectory(target, 3.0)
-            if ok:
-                self._auto_joint2_move_done = True
-                self._ui_set_status("AUTO: joint2 ajustado (-20% HOME)")
-            else:
-                self._log_warning(f"[AUTO] Falló mover joint2 (-20%): {info}")
-                if retries > 0:
-                    self.signal_schedule_home_offset.emit(2000, retries - 1)
+            self._set_motion_lock(True)
+            try:
+                self._log(f"[AUTO] Ajuste joint2=-20% desde HOME -> {target[1]:.3f} rad")
+                ok, info = self._publish_joint_trajectory(target, 3.0)
+                if ok:
+                    time.sleep(3.15)
+                    self._auto_joint2_move_done = True
+                    self._ui_set_status("AUTO: joint2 ajustado (-20% HOME)")
+                else:
+                    self._log_warning(f"[AUTO] Falló mover joint2 (-20%): {info}")
+                    if retries > 0:
+                        self.signal_schedule_home_offset.emit(2000, retries - 1)
+            finally:
+                self._set_motion_lock(False)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4996,16 +5246,317 @@ class ControlPanelV2(QMainWindow):
             return
         self._log("[ROBOT] Iniciando movimiento a HOME")
         self._set_status("Moviendo a HOME…")
+        move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
+        self._set_motion_lock(True)
+
+        def worker():
+            try:
+                ok, info = self._publish_joint_trajectory(JOINT_HOME_POSE_RAD, move_sec)
+                if ok:
+                    time.sleep(move_sec + 0.15)
+                    self._ui_set_status("HOME ejecutado (JointTrajectory)")
+                    self._log(f"[ROBOT] HOME: JointTrajectory en {info}")
+                else:
+                    self._ui_set_status(f"HOME falló: {info}", error=True)
+                    self._log_warning(f"[ROBOT] HOME falló: {info}")
+            finally:
+                self._set_motion_lock(False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_robot_test(self):
+        self._log_button("TEST ROBOT")
+        if self._script_motion_active:
+            self._set_status("TEST ROBOT en curso; espera", error=False)
+            return
+        if not self._require_manual_ready("TEST ROBOT"):
+            return
+        self._reach_overlay_enabled = True
+        self._reach_overlay_points = []
+        self._reach_overlay_size = (0, 0)
         self._set_motion_lock(True)
         move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
-        ok, info = self._publish_joint_trajectory(JOINT_HOME_POSE_RAD, move_sec)
-        if ok:
-            self._set_status("HOME ejecutado (JointTrajectory)")
-            self._log(f"[ROBOT] HOME: JointTrajectory en {info}")
+        sequence = [
+            ("HOME", JOINT_HOME_POSE_RAD),
+            ("Mesa", JOINT_TABLE_POSE_RAD),
+            ("Cesta", JOINT_BASKET_POSE_RAD),
+            ("HOME", JOINT_HOME_POSE_RAD),
+        ]
+
+        def worker():
+            try:
+                for label, pose in sequence:
+                    self._ui_set_status(f"TEST ROBOT: {label}…")
+                    ok, info = self._publish_joint_trajectory(pose, move_sec)
+                    if not ok:
+                        self._ui_set_status(f"TEST ROBOT falló: {label} ({info})", error=True)
+                        self._log_warning(f"[ROBOT] TEST ROBOT falló en {label}: {info}")
+                        return
+                    time.sleep(move_sec + 0.15)
+                self._ui_set_status("TEST ROBOT completado")
+            finally:
+                self._set_motion_lock(False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _compute_reach_overlay_points(self, w: int, h: int) -> List[Tuple[int, int]]:
+        if w <= 0 or h <= 0:
+            return []
+        points: List[Tuple[int, int]] = []
+        count = max(12, int(REACH_OVERLAY_POINTS))
+        step = (2.0 * math.pi) / float(count)
+        for idx in range(count):
+            ang = step * idx
+            x = UR5_BASE_X + UR5_REACH_RADIUS * math.cos(ang)
+            y = UR5_BASE_Y + UR5_REACH_RADIUS * math.sin(ang)
+            pix = world_xyz_to_pixel(x, y, REACH_OVERLAY_Z, w, h)
+            if not pix:
+                pix = table_xy_to_pixel(x, y, w, h)
+            if pix:
+                points.append(pix)
+        return points
+
+    def _publish_calib_grid_marker(self) -> None:
+        if Marker is None or Point is None or Duration is None:
+            self._log("[CALIB] Marker no disponible")
+            return
+        if self._moveit_node is None:
+            self._init_moveit_publisher()
+        if self._moveit_node is None:
+            self._log("[CALIB] ROS node no disponible para Marker")
+            return
+        if self._marker_pub is None:
+            try:
+                self._marker_pub = self._moveit_node.create_publisher(Marker, "/calibration_grid", 1)
+            except Exception as exc:
+                self._log(f"[CALIB] Error creando publisher Marker: {exc}")
+                self._marker_pub = None
+        if self._marker_pub is None:
+            return
+
+        table_top = self._resolve_table_top_z()
+        x_min = TABLE_CENTER_X - (TABLE_SIZE_X / 2.0)
+        x_max = TABLE_CENTER_X + (TABLE_SIZE_X / 2.0)
+        y_min = TABLE_CENTER_Y - (TABLE_SIZE_Y / 2.0)
+        y_max = TABLE_CENTER_Y + (TABLE_SIZE_Y / 2.0)
+        step = max(0.02, CALIB_GRID_STEP)
+        marker = Marker()
+        marker.header.frame_id = WORLD_FRAME or "world"
+        try:
+            marker.header.stamp = Time().to_msg()
+        except Exception:
+            pass
+        marker.ns = "calib_grid"
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        marker.scale.x = 0.004
+        marker.color.r = 0.12
+        marker.color.g = 0.40
+        marker.color.b = 0.96
+        marker.color.a = 0.8
+        marker.pose.orientation.w = 1.0
+        marker.lifetime = Duration(sec=1, nanosec=0)
+
+        points: List[Point] = []
+        x = x_min
+        while x <= (x_max + 1e-6):
+            p0 = Point(x=x, y=y_min, z=table_top)
+            p1 = Point(x=x, y=y_max, z=table_top)
+            points.extend([p0, p1])
+            x += step
+        y = y_min
+        while y <= (y_max + 1e-6):
+            p0 = Point(x=x_min, y=y, z=table_top)
+            p1 = Point(x=x_max, y=y, z=table_top)
+            points.extend([p0, p1])
+            y += step
+        marker.points = points
+        self._marker_pub.publish(marker)
+        self._set_status("Malla de calibración publicada en /calibration_grid", error=False)
+        self._log("[CALIB] Malla publicada en /calibration_grid")
+
+    def _resolve_table_top_z(self) -> float:
+        if self._table_top_z is not None:
+            return self._table_top_z
+        self._load_sdf_geometry_cache()
+        if self._table_top_z is None:
+            self._table_top_z = 0.775
+        return self._table_top_z
+
+    def _load_sdf_geometry_cache(self) -> None:
+        if self._sdf_model_cache:
+            return
+        world_path = self.world_combo.currentText().strip()
+        if not world_path or not os.path.isfile(world_path):
+            world_path = os.path.join(WORLDS_DIR, "ur5_mesa_objetos.sdf")
+        if not os.path.isfile(world_path):
+            return
+        try:
+            tree = ET.parse(world_path)
+            root = tree.getroot()
+        except Exception:
+            return
+
+        def _parse_pose(pose_text: str) -> Tuple[float, float, float]:
+            parts = [p for p in (pose_text or "").split() if p]
+            if len(parts) >= 3:
+                try:
+                    return float(parts[0]), float(parts[1]), float(parts[2])
+                except Exception:
+                    pass
+            return 0.0, 0.0, 0.0
+
+        for model in root.findall(".//model"):
+            name = model.attrib.get("name") or ""
+            if not name:
+                continue
+            geom = None
+            geom_type = None
+            size = None
+            length = None
+            radius = None
+            model_pose = _parse_pose(model.findtext("pose") or "")
+            link = model.find("link")
+            if link is not None:
+                collision = link.find("collision")
+                if collision is None:
+                    collision = link.find("visual")
+                if collision is not None:
+                    geom = collision.find("geometry")
+            if geom is None:
+                continue
+            box = geom.find("box")
+            cyl = geom.find("cylinder")
+            sph = geom.find("sphere")
+            if box is not None:
+                geom_type = "box"
+                size_text = box.findtext("size") or ""
+                parts = [p for p in size_text.split() if p]
+                if len(parts) == 3:
+                    try:
+                        size = tuple(float(p) for p in parts)
+                    except Exception:
+                        size = None
+            elif cyl is not None:
+                geom_type = "cylinder"
+                try:
+                    radius = float(cyl.findtext("radius") or 0.0)
+                    length = float(cyl.findtext("length") or 0.0)
+                except Exception:
+                    radius = None
+                    length = None
+            elif sph is not None:
+                geom_type = "sphere"
+                try:
+                    radius = float(sph.findtext("radius") or 0.0)
+                except Exception:
+                    radius = None
+            data = {
+                "type": geom_type,
+                "size": size,
+                "radius": radius,
+                "length": length,
+                "pose": model_pose,
+            }
+            self._sdf_model_cache[name] = data
+            if name == "mesa_pro" and size and len(size) == 3:
+                link_pose = _parse_pose(link.findtext("pose") or "")
+                top = model_pose[2] + link_pose[2] + (size[2] / 2.0)
+                self._table_top_z = top
+
+    def _post_calibration_pipeline(self) -> None:
+        objects = self._build_object_report()
+        if objects:
+            self._log_object_report(objects)
+            self._pickable_map_override = {obj["id"]: obj["pickable"] for obj in objects}
         else:
-            self._set_status(f"HOME falló: {info}", error=True)
-            self._log_warning(f"[ROBOT] HOME falló: {info}")
-        self._set_motion_lock(False)
+            self._pickable_map_override = None
+        self.signal_update_objects.emit()
+
+    def _build_object_report(self) -> List[Dict[str, object]]:
+        from .panel_utils import get_object_positions, visible_table_object, get_object_pose_gz
+
+        self._load_sdf_geometry_cache()
+        table_top = self._resolve_table_top_z()
+        objects = []
+        positions = get_object_positions()
+        if not positions:
+            return objects
+        for name, (x, y, z) in sorted(positions.items()):
+            if not visible_table_object(name, (x, y, z)):
+                continue
+            sdf = self._sdf_model_cache.get(name, {})
+            geom_type = sdf.get("type") or "desconocido"
+            size = sdf.get("size")
+            radius = sdf.get("radius")
+            length = sdf.get("length")
+            height = None
+            if geom_type == "box" and size:
+                height = float(size[2])
+            elif geom_type == "cylinder" and length:
+                height = float(length)
+            elif geom_type == "sphere" and radius:
+                height = float(radius) * 2.0
+            if height:
+                z = table_top + (height / 2.0)
+            yaw = 0.0
+            pose = get_object_pose_gz(name)
+            if pose and isinstance(pose, dict):
+                orient = pose.get("orientation") or {}
+                quat = (
+                    float(orient.get("x") or 0.0),
+                    float(orient.get("y") or 0.0),
+                    float(orient.get("z") or 0.0),
+                    float(orient.get("w") or 1.0),
+                )
+                yaw = yaw_from_quaternion(type("Q", (), {"x": quat[0], "y": quat[1], "z": quat[2], "w": quat[3]})())
+
+            pickable, reason = self._is_pickable(name, x, y, z, table_top, positions)
+            tipo = "cubo" if geom_type == "box" else "cilindro" if geom_type == "cylinder" else "prisma"
+            objects.append(
+                {
+                    "id": name,
+                    "tipo": tipo,
+                    "pose": [round(x, 3), round(y, 3), round(z, 3), round(yaw, 3)],
+                    "pickable": pickable,
+                    "motivo": reason,
+                }
+            )
+        return objects
+
+    def _is_pickable(
+        self,
+        name: str,
+        x: float,
+        y: float,
+        z: float,
+        table_top: float,
+        positions: Dict[str, Tuple[float, float, float]],
+    ) -> Tuple[bool, Optional[str]]:
+        dx = x - UR5_BASE_X
+        dy = y - UR5_BASE_Y
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist > (UR5_REACH_RADIUS - 0.02):
+            return False, "fuera_de_alcance"
+        pre_grasp_z = z + PICKABLE_PRE_GRASP_Z
+        if pre_grasp_z <= (table_top + 0.05):
+            return False, "pregrasp_bajo"
+        for other, (ox, oy, _oz) in positions.items():
+            if other == name:
+                continue
+            if (ox - x) ** 2 + (oy - y) ** 2 < (PICKABLE_MIN_CLEARANCE ** 2):
+                return False, "colision_con_objetos"
+        return True, None
+
+    def _log_object_report(self, objects: List[Dict[str, object]]) -> None:
+        self._emit_log("[PICK][REPORT] Objetos detectados:")
+        for obj in objects:
+            motivo = obj.get("motivo")
+            motivo_txt = f" motivo={motivo}" if motivo else ""
+            self._emit_log(
+                f"- id={obj['id']} tipo={obj['tipo']} pose={obj['pose']} pickable={obj['pickable']}{motivo_txt}"
+            )
 
     def _go_table(self):
         self._log_button("Go Mesa")
@@ -5013,51 +5564,52 @@ class ControlPanelV2(QMainWindow):
             return
         self._log("[ROBOT] Iniciando movimiento a Mesa")
         self._set_status("Moviendo a Mesa…")
-        self._set_motion_lock(True)
         move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
-        ok, info = self._publish_joint_trajectory(JOINT_TABLE_POSE_RAD, move_sec)
-        if ok:
-            self._set_status("Mesa ejecutado (JointTrajectory)")
-            self._log(f"[ROBOT] Mesa: JointTrajectory en {info}")
-        else:
-            self._set_status(f"Mesa falló: {info}", error=True)
-            self._log_warning(f"[ROBOT] Mesa falló: {info}")
-        self._set_motion_lock(False)
+        self._set_motion_lock(True)
+
+        def worker():
+            try:
+                ok, info = self._publish_joint_trajectory(JOINT_TABLE_POSE_RAD, move_sec)
+                if ok:
+                    time.sleep(move_sec + 0.15)
+                    self._ui_set_status("Mesa ejecutado (JointTrajectory)")
+                    self._log(f"[ROBOT] Mesa: JointTrajectory en {info}")
+                else:
+                    self._ui_set_status(f"Mesa falló: {info}", error=True)
+                    self._log_warning(f"[ROBOT] Mesa falló: {info}")
+            finally:
+                self._set_motion_lock(False)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _go_basket(self):
         self._log_button("Go Cesta")
         if not self._require_manual_ready("Cesta"):
             return
         self._set_status("Moviendo a Cesta…")
-        self._set_motion_lock(True)
         move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
-        ok, info = self._publish_joint_trajectory(JOINT_BASKET_POSE_RAD, move_sec)
-        if ok:
-            self._set_status("Cesta ejecutado (JointTrajectory)")
-            self._log(f"[ROBOT] Cesta: JointTrajectory en {info}")
-        else:
-            self._set_status(f"Cesta falló: {info}", error=True)
-            self._log_warning(f"[ROBOT] Cesta falló: {info}")
-        self._set_motion_lock(False)
+        self._set_motion_lock(True)
+
+        def worker():
+            try:
+                ok, info = self._publish_joint_trajectory(JOINT_BASKET_POSE_RAD, move_sec)
+                if ok:
+                    time.sleep(move_sec + 0.15)
+                    self._ui_set_status("Cesta ejecutado (JointTrajectory)")
+                    self._log(f"[ROBOT] Cesta: JointTrajectory en {info}")
+                else:
+                    self._ui_set_status(f"Cesta falló: {info}", error=True)
+                    self._log_warning(f"[ROBOT] Cesta falló: {info}")
+            finally:
+                self._set_motion_lock(False)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _toggle_gripper_button(self, checked: bool):
-        if not self._require_manual_ready("Gripper"):
+        if not self._command_gripper(checked, log_action="Gripper"):
             return
-        self._gripper_closed = checked
-        self.btn_gripper.setText("Abrir gripper" if checked else "Cerrar gripper")
-        self._log_button(f"Gripper {'cerrar' if checked else 'abrir'}")
-        if self._moveit_node is None:
-            self._init_moveit_publisher()
-        pub = self._get_gripper_publisher(GRIPPER_CMD_TOPIC)
-        if pub is None:
-            self._set_status("Gripper: publisher no disponible", error=True)
-            self._log_warning("[GRIPPER] Publisher no disponible")
-            return
-        target = GRIPPER_CLOSED_RAD if checked else GRIPPER_OPEN_RAD
-        msg = Float64MultiArray()
-        msg.data = [float(target), float(target) * GRIPPER_JOINT2_SIGN]
-        pub.publish(msg)
-        self._set_status(f"Gripper -> {target:.3f} rad", error=False)
+        if checked:
+            self._schedule_attach_attempt("gripper_close")
     
     def _on_camera_click(self, px: int, py: int):
         """Manejar click en la imagen de cámara."""
@@ -5176,6 +5728,7 @@ class ControlPanelV2(QMainWindow):
             if seen_targets != targets:
                 self._invalidate_settle("cambio de modelos en Gazebo", restart=True)
         updates = {}
+        known = get_object_positions()
         for pose in poses:
             if not isinstance(pose, dict):
                 continue
@@ -5183,7 +5736,10 @@ class ControlPanelV2(QMainWindow):
             pos = pose.get("position") or {}
             if not name or not isinstance(pos, dict):
                 continue
-            if name not in get_object_positions():
+            base_name = name.split("::")[0] if isinstance(name, str) else ""
+            if name not in known and base_name in known:
+                name = base_name
+            if name not in known:
                 continue
             try:
                 x = float(pos.get("x"))
@@ -5239,6 +5795,11 @@ class ControlPanelV2(QMainWindow):
         self._log_button("Calibrar")
         from .panel_utils import load_table_calib, TABLE_CALIB_PATH
 
+        self._capture_calibration_frame()
+        if AUTO_CALIB_FROM_CAMERA and not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
+            if self._auto_calibrate_from_camera():
+                return
+
         if not self._objects_settled:
             self._request_settle_snapshot("calibrar")
             self._log_calib_blocked("esperando caída/estabilidad de objetos")
@@ -5257,22 +5818,18 @@ class ControlPanelV2(QMainWindow):
         if self._calibrating:
             self._calibrating = False
             self._calib_points = []
+            self._calib_grid_until = 0.0
             self.btn_calibrate.setText("Calibrar")
             self._set_status("Calibración desactivada", error=False)
             self._log("[CALIB] Calibración desactivada")
             return
 
-        # Si ya hay calibración en archivo (igual que Panel Only), no pedir clicks
+        # Si ya hay calibración en archivo, permitir recalibración manual igualmente.
         try:
             calib = load_table_calib()
             if calib:
-                self._calibrating = False
-                self._calib_points = []
-                self.btn_calibrate.setText("Calibrar")
-                self._set_status("✅ Calibración cargada desde archivo - sin clicks", error=False)
-                self._log(f"[CALIB] Calibración ya cargada ({TABLE_CALIB_PATH}) - sin interacción")
-                self._refresh_objects_from_gz_async()
-                return
+                self._log(f"[CALIB] Calibración existente ({TABLE_CALIB_PATH}); iniciando modo manual")
+                self._set_status("Calibración existente; iniciando modo manual", error=False)
         except Exception as e:
             self._log(f"[CALIB] Aviso: no se pudo leer calibración guardada ({e}), se ofrece modo manual")
         
@@ -5286,10 +5843,109 @@ class ControlPanelV2(QMainWindow):
         self._selected_object = None
         self._selected_px = None
         self._selected_world = None
+        self._calib_grid_until = time.time() + 1.0
         self.calib_service.start_calibration(self.camera_topic, CalibrationMode.LINEAR_2PT)
         self.btn_calibrate.setText("✓ Calibrar (activo - click para desactivar)")
         self._set_status("CALIBRACIÓN: Click en 4 esquinas de la mesa (arriba-izq, arriba-der, abajo-der, abajo-izq)", error=False)
         self._log("[CALIB] Calibración manual 4 puntos (grid activo)")
+
+    def _capture_calibration_frame(self) -> None:
+        """Captura la última imagen disponible para trazabilidad."""
+        if not self._last_camera_frame:
+            self._log("[CALIB] Imagen no disponible para captura")
+            return
+        _qimg, w, h, ts = self._last_camera_frame
+        self._log(f"[CALIB] Imagen capturada {w}x{h} age={time.time() - ts:.2f}s")
+
+    def _auto_calibrate_from_camera(self) -> bool:
+        """Auto-calibrar usando la cámara overhead y la geometría de la mesa."""
+        from .panel_utils import (
+            load_table_calib,
+            TABLE_CALIB_PATH,
+            TABLE_CAM_INFO,
+            pixel_to_norm,
+        )
+
+        calib = load_table_calib()
+        if not calib or not TABLE_CAM_INFO:
+            return False
+        w = getattr(self.camera_view, "_img_width", 0) if hasattr(self, "camera_view") else 0
+        h = getattr(self.camera_view, "_img_height", 0) if hasattr(self, "camera_view") else 0
+        if w <= 0 or h <= 0:
+            try:
+                w = int(TABLE_CAM_INFO.get("width") or 0)
+                h = int(TABLE_CAM_INFO.get("height") or 0)
+            except Exception:
+                w = 0
+                h = 0
+        if w <= 0 or h <= 0:
+            self._log("[CALIB] Auto: tamaño de imagen desconocido")
+            return False
+
+        table_z = 0.775
+        corners = [
+            (TABLE_CENTER_X - TABLE_SIZE_X / 2.0, TABLE_CENTER_Y + TABLE_SIZE_Y / 2.0, table_z),
+            (TABLE_CENTER_X + TABLE_SIZE_X / 2.0, TABLE_CENTER_Y + TABLE_SIZE_Y / 2.0, table_z),
+            (TABLE_CENTER_X + TABLE_SIZE_X / 2.0, TABLE_CENTER_Y - TABLE_SIZE_Y / 2.0, table_z),
+            (TABLE_CENTER_X - TABLE_SIZE_X / 2.0, TABLE_CENTER_Y - TABLE_SIZE_Y / 2.0, table_z),
+        ]
+        pixel_points = []
+        world_points = []
+        for x, y, z in corners:
+            pix = world_xyz_to_pixel(x, y, z, w, h)
+            if not pix:
+                self._log("[CALIB] Auto: no se pudo proyectar esquina de mesa")
+                return False
+            nx, ny = pixel_to_norm(pix[0], pix[1], w, h)
+            pixel_points.append((nx, ny))
+            world_points.append((x, y))
+
+        try:
+            hom = self._compute_homography(pixel_points, world_points)
+        except Exception as exc:
+            self._log(f"[CALIB] Auto: error calculando homografía: {exc}")
+            return False
+        if hom is None:
+            self._log("[CALIB] Auto: homografía inválida")
+            return False
+
+        payload = {
+            "mode": "homography",
+            "h": hom,
+            "camera": TABLE_CAM_INFO,
+        }
+        try:
+            with open(TABLE_CALIB_PATH, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as exc:
+            self._log(f"[CALIB] Auto: no se pudo guardar {TABLE_CALIB_PATH}: {exc}")
+            return False
+
+        self._load_table_calibration()
+        self._calib_grid_until = time.time() + 1.0
+        self._calibrating = False
+        self._calib_points = []
+        self._set_status("✅ Calibración auto aplicada", error=False)
+        self._log("[CALIB] Auto: calibración guardada y cargada")
+        self._publish_calib_grid_marker()
+        self._post_calibration_pipeline()
+        self._refresh_objects_from_gz_async()
+        return True
+
+    @staticmethod
+    def _compute_homography(pixel_points: List[Tuple[float, float]], world_points: List[Tuple[float, float]]):
+        if len(pixel_points) < 4 or len(world_points) < 4:
+            return None
+        a_rows = []
+        for (u, v), (x, y) in zip(pixel_points, world_points):
+            a_rows.append([-u, -v, -1.0, 0.0, 0.0, 0.0, u * x, v * x, x])
+            a_rows.append([0.0, 0.0, 0.0, -u, -v, -1.0, u * y, v * y, y])
+        mat = np.array(a_rows, dtype=float)
+        _, _, v_t = np.linalg.svd(mat)
+        h = v_t[-1].reshape((3, 3))
+        if abs(h[2, 2]) > 1e-8:
+            h = h / h[2, 2]
+        return h.tolist()
     
     def _draw_calib_overlay(self, qimg: QImage, w: int, h: int) -> QImage:
         """Dibujar malla y puntos de calibración sobre la imagen."""
@@ -5302,47 +5958,62 @@ class ControlPanelV2(QMainWindow):
         painter.setRenderHint(QPainter.Antialiasing)
 
         try:
-            # Dibujar malla de calibración (grid) - IGUAL A PANEL ONLY
-            # Usar coordenadas de mundo (0.025m steps) + tabla_xy_to_pixel para convertir a píxeles
-            pen = QPen(QColor(30, 64, 175, 90))
-            pen.setWidth(1)
-            painter.setPen(pen)
-            
-            step_x = 0.025  # metros
-            step_y = 0.025  # metros
-            x_min = TABLE_CENTER_X - (TABLE_SIZE_X / 2.0)
-            x_max = TABLE_CENTER_X + (TABLE_SIZE_X / 2.0)
-            y_min = TABLE_CENTER_Y - (TABLE_SIZE_Y / 2.0)
-            y_max = TABLE_CENTER_Y + (TABLE_SIZE_Y / 2.0)
-            
-            # Líneas verticales (X constante)
-            x = x_min
-            while x <= (x_max + 1e-6):
-                p0 = table_xy_to_pixel(x, y_min, w, h)
-                p1 = table_xy_to_pixel(x, y_max, w, h)
-                if p0 and p1:
-                    painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
-                x += step_x
-            
-            # Líneas horizontales (Y constante)
-            y = y_min
-            while y <= (y_max + 1e-6):
-                p0 = table_xy_to_pixel(x_min, y, w, h)
-                p1 = table_xy_to_pixel(x_max, y, w, h)
-                if p0 and p1:
-                    painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
-                y += step_y
+            if time.time() <= self._calib_grid_until:
+                # Dibujar malla de calibración (grid) - IGUAL A PANEL ONLY
+                # Usar coordenadas de mundo (0.025m steps) + tabla_xy_to_pixel para convertir a píxeles
+                pen = QPen(QColor(30, 64, 175, 180))
+                pen.setWidth(2)
+                painter.setPen(pen)
 
-            # Etiquetas básicas de ejes para visibilidad (mismo estilo Panel Only)
-            painter.setPen(QPen(QColor(30, 64, 175, 160)))
-            for label_x in (TABLE_CENTER_X - 0.4, TABLE_CENTER_X, TABLE_CENTER_X + 0.4):
-                p = table_xy_to_pixel(label_x, y_min, w, h)
-                if p:
-                    painter.drawText(p[0] + 3, p[1] + 12, f"x={label_x:.1f}")
-            for label_y in (TABLE_CENTER_Y - 0.3, TABLE_CENTER_Y, TABLE_CENTER_Y + 0.3):
-                p = table_xy_to_pixel(x_min, label_y, w, h)
-                if p:
-                    painter.drawText(p[0] + 3, p[1] - 3, f"y={label_y:.1f}")
+                step_x = 0.025  # metros
+                step_y = 0.025  # metros
+                x_min = TABLE_CENTER_X - (TABLE_SIZE_X / 2.0)
+                x_max = TABLE_CENTER_X + (TABLE_SIZE_X / 2.0)
+                y_min = TABLE_CENTER_Y - (TABLE_SIZE_Y / 2.0)
+                y_max = TABLE_CENTER_Y + (TABLE_SIZE_Y / 2.0)
+
+                # Líneas verticales (X constante)
+                x = x_min
+                while x <= (x_max + 1e-6):
+                    p0 = table_xy_to_pixel(x, y_min, w, h)
+                    p1 = table_xy_to_pixel(x, y_max, w, h)
+                    if p0 and p1:
+                        painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+                    x += step_x
+
+                # Líneas horizontales (Y constante)
+                y = y_min
+                while y <= (y_max + 1e-6):
+                    p0 = table_xy_to_pixel(x_min, y, w, h)
+                    p1 = table_xy_to_pixel(x_max, y, w, h)
+                    if p0 and p1:
+                        painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+                    y += step_y
+
+                # Contorno de la mesa para mayor contraste
+                p_tl = table_xy_to_pixel(x_min, y_max, w, h)
+                p_tr = table_xy_to_pixel(x_max, y_max, w, h)
+                p_br = table_xy_to_pixel(x_max, y_min, w, h)
+                p_bl = table_xy_to_pixel(x_min, y_min, w, h)
+                if p_tl and p_tr and p_br and p_bl:
+                    edge_pen = QPen(QColor(16, 185, 129, 200))
+                    edge_pen.setWidth(2)
+                    painter.setPen(edge_pen)
+                    painter.drawLine(QPointF(p_tl[0], p_tl[1]), QPointF(p_tr[0], p_tr[1]))
+                    painter.drawLine(QPointF(p_tr[0], p_tr[1]), QPointF(p_br[0], p_br[1]))
+                    painter.drawLine(QPointF(p_br[0], p_br[1]), QPointF(p_bl[0], p_bl[1]))
+                    painter.drawLine(QPointF(p_bl[0], p_bl[1]), QPointF(p_tl[0], p_tl[1]))
+
+                # Etiquetas básicas de ejes para visibilidad (mismo estilo Panel Only)
+                painter.setPen(QPen(QColor(30, 64, 175, 160)))
+                for label_x in (TABLE_CENTER_X - 0.4, TABLE_CENTER_X, TABLE_CENTER_X + 0.4):
+                    p = table_xy_to_pixel(label_x, y_min, w, h)
+                    if p:
+                        painter.drawText(p[0] + 3, p[1] + 12, f"x={label_x:.1f}")
+                for label_y in (TABLE_CENTER_Y - 0.3, TABLE_CENTER_Y, TABLE_CENTER_Y + 0.3):
+                    p = table_xy_to_pixel(x_min, label_y, w, h)
+                    if p:
+                        painter.drawText(p[0] + 3, p[1] - 3, f"y={label_y:.1f}")
 
             # Dibujar cada punto de calibración
             for i, (px, py) in enumerate(self._calib_points):
@@ -5452,6 +6123,25 @@ class ControlPanelV2(QMainWindow):
         painter.end()
         return img_copy
 
+    def _draw_reach_overlay(self, qimg: QImage, w: int, h: int) -> QImage:
+        """Dibujar alcance del robot como puntos sobre la imagen."""
+        from PyQt5.QtGui import QPainter, QPen, QColor
+        from PyQt5.QtCore import Qt, QPointF
+
+        if not self._reach_overlay_points or self._reach_overlay_size != (w, h):
+            self._reach_overlay_points = self._compute_reach_overlay_points(w, h)
+            self._reach_overlay_size = (w, h)
+        if not self._reach_overlay_points:
+            return qimg
+        img_copy = qimg.copy()
+        painter = QPainter(img_copy)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(34, 197, 94, 200), 2, Qt.SolidLine))
+        for px, py in self._reach_overlay_points:
+            painter.drawPoint(QPointF(px, py))
+        painter.end()
+        return img_copy
+
     def _run_pick_demo(self):
         """Publica una secuencia MoveIt-only para el DEMO de mesa → cesta."""
         self._log_button("PICK MESA → CESTA")
@@ -5486,10 +6176,88 @@ class ControlPanelV2(QMainWindow):
         self._set_status("Pick demo: enviando poses a MoveIt…")
         self._set_motion_lock(True)
 
+        sequence = list(PICK_SEQUENCE)
+        obj_world = get_object_position(PICK_DEMO_OBJECT_NAME)
+        world_frame = WORLD_FRAME or "world"
+        if obj_world:
+            obj_info = self._selection_to_base(obj_world, world_frame)
+            if obj_info:
+                base_frame = obj_info["frame"]
+                obj_x, obj_y, obj_z = obj_info["coords"]
+                basket_coords, _ = transform_point_to_frame(
+                    BASKET_DROP,
+                    base_frame,
+                    source_frame=world_frame,
+                )
+                if basket_coords:
+                    basket_x, basket_y, basket_z = basket_coords
+                    sequence = [
+                        (
+                            "PRE_GRASP",
+                            _make_pose_data(
+                                (
+                                    obj_x,
+                                    obj_y,
+                                    obj_z + PICK_DEMO_PRE_GRASP_Z_OFFSET,
+                                ),
+                                frame=base_frame,
+                            ),
+                            0.6,
+                        ),
+                        (
+                            "GRASP",
+                            _make_pose_data(
+                                (
+                                    obj_x,
+                                    obj_y,
+                                    obj_z + PICK_DEMO_GRASP_Z_OFFSET,
+                                ),
+                                frame=base_frame,
+                            ),
+                            0.8,
+                        ),
+                        (
+                            "TRANSPORT",
+                            _make_pose_data(
+                                (
+                                    basket_x,
+                                    basket_y,
+                                    basket_z + PICK_DEMO_TRANSPORT_Z_OFFSET,
+                                ),
+                                frame=base_frame,
+                            ),
+                            0.6,
+                        ),
+                        (
+                            "DROP",
+                            _make_pose_data(
+                                (
+                                    basket_x,
+                                    basket_y,
+                                    basket_z + PICK_DEMO_DROP_Z_OFFSET,
+                                ),
+                                frame=base_frame,
+                            ),
+                            0.8,
+                        ),
+                    ]
+                    self._emit_log(
+                        "[PICK] objetivo=pieza_pick_mesa "
+                        f"world=({obj_world[0]:.3f},{obj_world[1]:.3f},{obj_world[2]:.3f}) "
+                        f"base=({obj_x:.3f},{obj_y:.3f},{obj_z:.3f}) frame={base_frame}"
+                    )
+                else:
+                    self._emit_log("[PICK] WARN: no se pudo transformar cesta a base; usando demo fijo")
+            else:
+                self._emit_log("[PICK] WARN: no se pudo transformar objeto a base; usando demo fijo")
+        else:
+            self._emit_log("[PICK] WARN: pieza_pick_mesa no encontrada; usando demo fijo")
+        self._selected_object = PICK_DEMO_OBJECT_NAME
+
         # LEGACY: plan_pick_demo_ik + JointTrajectory han pasado a ser legacy.
         def worker():
             try:
-                for label, pose_data, delay in PICK_SEQUENCE:
+                for label, pose_data, delay in sequence:
                     if self._moveit_state != MoveItState.READY:
                         raise RuntimeError("MoveIt no listo durante la secuencia")
                     position = pose_data.get("position", (0.0, 0.0, 0.0))
@@ -5498,7 +6266,25 @@ class ControlPanelV2(QMainWindow):
                         f"[PICK] Pose pick_target (BASE_FRAME): {position} frame_id={frame_id}"
                     )
                     self._publish_moveit_pose(label, pose_data)
-                    time.sleep(delay)
+                    if label == "GRASP":
+                        time.sleep(delay)
+                        def _grasp_attach() -> None:
+                            if self._command_gripper(True, log_action="PICK"):
+                                self._schedule_attach_attempt("pick_demo")
+                        QTimer.singleShot(0, _grasp_attach)
+                    elif label == "DROP":
+                        time.sleep(delay)
+                        def _drop_release() -> None:
+                            self._command_gripper(False, log_action="DROP")
+                            if self._drop_detach_supported():
+                                obj_name = self._normalize_attach_name(PICK_DEMO_OBJECT_NAME)
+                                topic = f"{GRIPPER_ATTACH_PREFIX}/{obj_name}/detach"
+                                pub = self._get_attach_publisher(topic)
+                                if pub is not None:
+                                    pub.publish(Empty())
+                        QTimer.singleShot(0, _drop_release)
+                    else:
+                        time.sleep(delay)
                 self._ui_set_status("Pick demo publicado (MoveIt maneja la ejecución)")
                 self._emit_log("[PICK] Secuencia MoveIt publicada correctamente.")
             except Exception as exc:
@@ -5662,6 +6448,8 @@ class ControlPanelV2(QMainWindow):
             self.btn_calibrate.setText("Calibrar")
             self._set_status(f"✅ Calibración completada ({dist_12:.0f}-{dist_34:.0f}px)", error=False)
             self._log(f"[CALIB] ✅ Homografía completada y almacenada en servicio")
+            self._publish_calib_grid_marker()
+            self._post_calibration_pipeline()
             self._refresh_objects_from_gz_async()
             
         except Exception as e:
@@ -5975,8 +6763,12 @@ class ControlPanelV2(QMainWindow):
         pickable_map = {}
         pickable_allowed = self._state_ready_moveit()
         if objects:
-            for name, (x, y, _z) in objects.items():
-                pickable_map[name] = pickable_allowed and not object_out_of_reach(x, y)
+            if self._pickable_map_override:
+                for name, (x, y, _z) in objects.items():
+                    pickable_map[name] = bool(self._pickable_map_override.get(name, False)) and pickable_allowed
+            else:
+                for name, (x, y, _z) in objects.items():
+                    pickable_map[name] = pickable_allowed and not object_out_of_reach(x, y)
         self.obj_panel.update_objects(objects, pickable=pickable_map)
 
         sel_text = "Selección: -"

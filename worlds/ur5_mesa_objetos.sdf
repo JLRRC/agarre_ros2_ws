@@ -59,77 +59,77 @@
     </model>
 
     <!-- ======================================================
-         MESA PRINCIPAL (AGARRE) — centro (0,0)
+         MESA PRINCIPAL (AGARRE) — centro (-0.17,0)
          ====================================================== -->
     <model name="mesa_pro">
       <static>true</static>
-      <pose>0 0 0 0 0 0</pose>
+      <pose>-0.17 0 0 0 0 0</pose>
       <link name="link">
 
         <collision name="tablero_collision">
           <pose>0 0 0.75 0 0 0</pose>
-          <geometry><box><size>1.20 0.80 0.05</size></box></geometry>
+          <geometry><box><size>0.768 0.80 0.05</size></box></geometry>
         </collision>
         <visual name="tablero_visual">
           <pose>0 0 0.75 0 0 0</pose>
-          <geometry><box><size>1.20 0.80 0.05</size></box></geometry>
+          <geometry><box><size>0.768 0.80 0.05</size></box></geometry>
           <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
         </visual>
 
         <!-- Bordes: pared alta (20 cm) en el extremo alejado del brazo + bordes bajos (2 cm) en los otros lados -->
-        <!-- Mesa: size 1.20 x 0.80 x 0.05, top_z=0.775 -->
+        <!-- Mesa: size 0.768 x 0.80 x 0.05, top_z=0.775 -->
         <collision name="wall_far_x_pos_c">
-          <pose>0.59 0 0.875 0 0 0</pose>
+          <pose>0.374 0 0.875 0 0 0</pose>
           <geometry><box><size>0.02 0.76 0.20</size></box></geometry>
         </collision>
         <visual name="wall_far_x_pos_v">
-          <pose>0.59 0 0.875 0 0 0</pose>
+          <pose>0.374 0 0.875 0 0 0</pose>
           <geometry><box><size>0.02 0.76 0.20</size></box></geometry>
           <material><diffuse>0.35 0.35 0.35 1</diffuse></material>
         </visual>
 
         <collision name="wall_near_x_neg_c">
-          <pose>-0.59 0 0.785 0 0 0</pose>
+          <pose>-0.374 0 0.785 0 0 0</pose>
           <geometry><box><size>0.02 0.76 0.02</size></box></geometry>
         </collision>
         <visual name="wall_near_x_neg_v">
-          <pose>-0.59 0 0.785 0 0 0</pose>
+          <pose>-0.374 0 0.785 0 0 0</pose>
           <geometry><box><size>0.02 0.76 0.02</size></box></geometry>
           <material><diffuse>0.35 0.35 0.35 1</diffuse></material>
         </visual>
 
         <collision name="wall_north_c">
           <pose>0 0.39 0.785 0 0 0</pose>
-          <geometry><box><size>1.16 0.02 0.02</size></box></geometry>
+          <geometry><box><size>0.728 0.02 0.02</size></box></geometry>
         </collision>
         <visual name="wall_north_v">
           <pose>0 0.39 0.785 0 0 0</pose>
-          <geometry><box><size>1.16 0.02 0.02</size></box></geometry>
+          <geometry><box><size>0.728 0.02 0.02</size></box></geometry>
           <material><diffuse>0.35 0.35 0.35 1</diffuse></material>
         </visual>
 
         <collision name="wall_south_c">
           <pose>0 -0.39 0.785 0 0 0</pose>
-          <geometry><box><size>1.16 0.02 0.02</size></box></geometry>
+          <geometry><box><size>0.728 0.02 0.02</size></box></geometry>
         </collision>
         <visual name="wall_south_v">
           <pose>0 -0.39 0.785 0 0 0</pose>
-          <geometry><box><size>1.16 0.02 0.02</size></box></geometry>
+          <geometry><box><size>0.728 0.02 0.02</size></box></geometry>
           <material><diffuse>0.35 0.35 0.35 1</diffuse></material>
         </visual>
 
         <!-- patas -->
-        <collision name="p1c"><pose> 0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
-        <visual    name="p1v"><pose> 0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+        <collision name="p1c"><pose> 0.334  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p1v"><pose> 0.334  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
 
-        <collision name="p2c"><pose> 0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
-        <visual    name="p2v"><pose> 0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+        <collision name="p2c"><pose> 0.334 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p2v"><pose> 0.334 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
 
-        <collision name="p3c"><pose>-0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
-        <visual    name="p3v"><pose>-0.55  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+        <collision name="p3c"><pose>-0.334  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p3v"><pose>-0.334  0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
 
-        <collision name="p4c"><pose>-0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
-        <visual    name="p4v"><pose>-0.55 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
+        <collision name="p4c"><pose>-0.334 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry></collision>
+        <visual    name="p4v"><pose>-0.334 -0.35 0.375 0 0 0</pose><geometry><box><size>0.05 0.05 0.75</size></box></geometry><material><diffuse>0.15 0.15 0.15 1</diffuse></material></visual>
 
       </link>
     </model>
@@ -137,7 +137,7 @@
     <!-- Objetos sobre mesa principal -->
     <model name="cubo_rojo">
       <static>false</static>
-      <pose>0.15 0.10 0.80 0 0 0</pose>
+      <pose>-0.02 0.10 0.80 0 0 0</pose>
       <link name="link">
         <inertial>
           <mass>0.08</mass>
@@ -153,7 +153,7 @@
 
     <model name="cilindro_verde">
       <static>false</static>
-      <pose>-0.10 0.05 0.80 0 0 0</pose>
+      <pose>-0.27 0.05 0.80 0 0 0</pose>
       <link name="link">
         <inertial>
           <mass>0.06</mass>
@@ -169,7 +169,7 @@
 
     <model name="caja_azul">
       <static>false</static>
-      <pose>0.00 -0.15 0.80 0 0 0</pose>
+      <pose>-0.17 -0.15 0.80 0 0 0</pose>
       <link name="link">
         <inertial>
           <mass>0.10</mass>
@@ -186,7 +186,7 @@
     <!-- PIEZA DINÁMICA en la mesa principal (para agarrar) -->
     <model name="pieza_pick_mesa">
       <static>false</static>
-      <pose>-0.45 0.00 0.81 0 0 0</pose>
+      <pose>-0.42 0.00 0.81 0 0 0</pose>
       <link name="link">
         <inertial>
           <mass>0.08</mass>
@@ -203,7 +203,7 @@
     <!-- ======================================================
          MESA ROBOT (PEQUEÑA) — ALINEADA con mesa principal
          - centro x = -1.10, y = 0.00  (alineada en Y)
-         - borde cercano aprox: x = -0.75, mesa principal borde: x = -0.60 -> gap ~0.15
+         - borde cercano aprox: x = -0.75, mesa principal borde: x = -0.75 -> gap ~0
          ====================================================== -->
     <model name="mesa_robot">
       <static>true</static>
@@ -426,9 +426,9 @@
 
     <!-- DROP_OBJECTS_BEGIN -->
 
-    <model name="drop_obj_01_box_cube">
+    <model name="box_red">
       <static>false</static>
-      <pose>0.000 0.000 1.925 0 0 0</pose>
+      <pose>-0.170 0.000 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -439,9 +439,9 @@
     </model>
 
 
-    <model name="drop_obj_02_box_flat">
+    <model name="box_blue">
       <static>false</static>
-      <pose>0.040 0.000 1.925 0 0 0</pose>
+      <pose>-0.130 0.000 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -452,9 +452,9 @@
     </model>
 
 
-    <model name="drop_obj_03_box_tall">
+    <model name="box_green">
       <static>false</static>
-      <pose>-0.040 0.000 1.925 0 0 0</pose>
+      <pose>-0.210 0.000 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -465,9 +465,9 @@
     </model>
 
 
-    <model name="drop_obj_04_cyl_long">
+    <model name="cyl_gray">
       <static>false</static>
-      <pose>0.000 0.040 1.925 0 0 0</pose>
+      <pose>-0.170 0.040 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -478,9 +478,9 @@
     </model>
 
 
-    <model name="drop_obj_05_cyl_mid">
+    <model name="cyl_orange">
       <static>false</static>
-      <pose>0.000 -0.040 1.925 0 0 0</pose>
+      <pose>-0.170 -0.040 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -491,9 +491,9 @@
     </model>
 
 
-    <model name="drop_obj_06_cyl_puck">
+    <model name="cyl_purple">
       <static>false</static>
-      <pose>0.050 0.050 1.925 0 0 0</pose>
+      <pose>-0.120 0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -504,9 +504,9 @@
     </model>
 
 
-    <model name="drop_obj_07_box_lightblue">
+    <model name="box_lightblue">
       <static>false</static>
-      <pose>-0.050 0.050 1.925 0 0 0</pose>
+      <pose>-0.220 0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -517,9 +517,9 @@
     </model>
 
 
-    <model name="drop_obj_08_cyl_green">
+    <model name="cyl_green">
       <static>false</static>
-      <pose>0.050 -0.050 1.925 0 0 0</pose>
+      <pose>-0.120 -0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -530,9 +530,9 @@
     </model>
 
 
-    <model name="drop_obj_09_box_bar">
+    <model name="box_yellow">
       <static>false</static>
-      <pose>-0.050 -0.050 1.925 0 0 0</pose>
+      <pose>-0.220 -0.050 1.925 0 0 0</pose>
       <link name="link">
         <gravity>true</gravity>
         <kinematic>false</kinematic>
@@ -543,9 +543,9 @@
     </model>
 
 
-    <model name="drop_obj_10_cross">
+    <model name="cross_cyan">
       <static>false</static>
-      <pose>0.080 0.000 1.925 0 0 0</pose>
+      <pose>-0.090 0.000 1.925 0 0 0</pose>
 
       <link name="link_a">
         <pose>0 0 0 0 0 0</pose>
