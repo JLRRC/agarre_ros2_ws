@@ -92,6 +92,7 @@ from .panel_config import (
     WORLDS_DIR,
     WS_DIR,
     ROS_AVAILABLE,
+    ATTACHABLE_OBJECTS,
 )
 from .panel_utils import (
     bash_preamble,
@@ -105,6 +106,7 @@ from .panel_utils import (
     bulk_update_object_positions,
     get_object_positions,
     get_object_position,
+    remove_object_position,
     gz_sim_status,
     base_to_world,
     world_to_base,
@@ -214,6 +216,18 @@ class SystemState(Enum):
     ERROR = "ERROR"
 
 
+class FlowState(Enum):
+    INIT = "INIT"
+    WAIT_TF = "WAIT_TF"
+    TEST_OK = "TEST_OK"
+    WAIT_STABLE = "WAIT_STABLE"
+    AUTO_CALIBRATE = "AUTO_CALIBRATE"
+    PROCESS_OBJECTS = "PROCESS_OBJECTS"
+    UPDATE_OBJECT_LIST = "UPDATE_OBJECT_LIST"
+    AUTO_CALIBRATED = "AUTO_CALIBRATED"
+    READY = "READY"
+
+
 class MoveItState(Enum):
     OFF = "OFF"
     STARTING = "STARTING"
@@ -232,7 +246,7 @@ DROP_OBJECT_NAMES = [
     "box_yellow",
     "cross_cyan",
 ]
-OBJECT_SETTLE_Z_EPS = 0.002
+OBJECT_SETTLE_Z_EPS = 0.003
 OBJECT_FALL_Z_EPS = 0.01
 OBJECT_SETTLE_WINDOW_SEC = 1.0
 OBJECT_SETTLE_POLL_SEC = 0.6
@@ -248,6 +262,7 @@ _CAMERA_REQUIRED_ENV = os.environ.get("PANEL_CAMERA_REQUIRED")
 CAMERA_REQUIRED = None if _CAMERA_REQUIRED_ENV is None else _CAMERA_REQUIRED_ENV.strip().lower() not in ("0", "false", "no", "off")
 STALE_PROCESS_GRACE_SEC = float(os.environ.get("PANEL_STALE_GRACE_SEC", "20"))
 TF_INIT_GRACE_SEC = float(os.environ.get("PANEL_TF_INIT_GRACE_SEC", "3.0"))
+TF_PROBE_OK_CYCLES = int(os.environ.get("PANEL_TF_PROBE_OK_CYCLES", "3"))
 CONTROLLER_CHECK_INTERVAL_SEC = 3.0
 CONTROLLER_START_GRACE_SEC = float(os.environ.get("PANEL_CTRL_START_GRACE_SEC", "12.0"))
 POSE_INFO_MAX_AGE_SEC = float(os.environ.get("PANEL_POSE_INFO_MAX_AGE_SEC", "1.0"))
@@ -564,6 +579,9 @@ class ControlPanelV2(QMainWindow):
         self._tf_ready_last_notice = 0.0
         self._tf_ready_state = False
         self._tf_not_ready_logged = False
+        self._tf_probe_ok_cycles = 0
+        self._tf_probe_logged_world_base = False
+        self._tf_probe_logged_base_tool = False
         self._trace_ready = False
         self._bridge_ready = False
         self._trace_print_period = max(0.5, TRACE_PRINT_PERIOD_SEC)
@@ -577,6 +595,12 @@ class ControlPanelV2(QMainWindow):
         else:
             self._camera_required = bool(CAMERA_REQUIRED)
         self._system_state = SystemState.BOOT
+        self._flow_state = FlowState.INIT
+        self._calib_mode: Optional[str] = None
+        self._auto_calib_objects: List[Dict[str, object]] = []
+        self._robot_reach_radius: Optional[float] = None
+        self._robot_height_limits: Optional[Tuple[float, float]] = None
+        self._robot_workspace_frame: Optional[str] = None
         self._system_state_reason = "boot"
         self._system_error_reason = ""
         self._managed_mode = PANEL_MANAGED
@@ -628,6 +652,7 @@ class ControlPanelV2(QMainWindow):
         self._objects_seen_fall = False
         self._settle_worker_active = False
         self._settle_thread: Optional[threading.Thread] = None
+        self._settle_locked = False
         self._objects_release_done = False
         self._pose_info_ok = False
         self._pose_info_msg_count = 0
@@ -683,6 +708,7 @@ class ControlPanelV2(QMainWindow):
         self._last_joint_positions: Dict[str, float] = {}
         self._last_joint_time: float = 0.0
         self._last_joint_stamp: float = 0.0
+        self._last_joint_wall: float = 0.0
         self._joint_current_topic = ""
         self._joint_active = False
         self._joint_names_warned = False
@@ -708,8 +734,6 @@ class ControlPanelV2(QMainWindow):
         self._camera_health_retry_scheduled = False
         self._camera_frame_count = 0
         self._camera_ready_frames = max(1, CAMERA_READY_FRAMES)
-        self._calibrating = False
-        self._calib_points = []  # Lista de (px, py, wx, wy)
         self._calib_grid_until = 0.0
         self._auto_joint2_move_done = False
         self._selected_object = None  # Objeto seleccionado para pick
@@ -719,7 +743,7 @@ class ControlPanelV2(QMainWindow):
         self._pickable_map_override: Optional[Dict[str, bool]] = None
         self._sdf_model_cache: Dict[str, Dict[str, object]] = {}
         self._table_top_z: Optional[float] = None
-        self._last_camera_frame: Optional[Tuple[object, int, int, float]] = None
+        self._last_camera_frame: Optional[Tuple[object, int, int, float, float]] = None
         self._marker_pub = None
         self._controller_check_inflight = False
         self._controllers_ok = False
@@ -1158,6 +1182,8 @@ class ControlPanelV2(QMainWindow):
     def _start_objects_settle_watch(self) -> None:
         if self._closing:
             return
+        if self._settle_locked:
+            return
         if self._settle_worker_active:
             return
         if not self._pose_info_ok:
@@ -1188,6 +1214,8 @@ class ControlPanelV2(QMainWindow):
 
     def _invalidate_settle(self, reason: str, *, restart: bool = True) -> None:
         if self._closing:
+            return
+        if self._settle_locked:
             return
         self._objects_settled = False
         self._objects_seen_fall = False
@@ -1261,8 +1289,12 @@ class ControlPanelV2(QMainWindow):
         self._objects_settled = settled
         if settled:
             self._emit_log("[PHYSICS][SETTLE] OK")
+            self._emit_log("[PHYSICS][SETTLE] OK (objetos estables)")
+            self._settle_locked = True
             self.signal_handle_objects_settled.emit()
             self.signal_status.emit("Objetos estabilizados", False)
+            if self._flow_state == FlowState.WAIT_STABLE:
+                self._emit_log("[FLOW] OBJECTS_STABLE")
         else:
             self._emit_log("[PHYSICS][SETTLE] Timeout: objetos no estabilizados.")
             self.signal_status.emit("Timeout: objetos no estabilizados", True)
@@ -1318,32 +1350,25 @@ class ControlPanelV2(QMainWindow):
         log_snapshot: bool = False,
     ) -> bool:
         self._log_calib_blocked("esperando caída/estabilidad de objetos")
+        self._emit_log(
+            f"[PHYSICS][SETTLE] window={OBJECT_SETTLE_WINDOW_SEC:.1f}s "
+            f"eps_xy={OBJECT_SETTLE_XY_EPS:.3f} eps_z={OBJECT_SETTLE_Z_EPS:.3f}"
+        )
         world_path = self.world_combo.currentText().strip()
         world_name = self._gz_world_name or (read_world_name(world_path) if world_path else GZ_WORLD)
         targets = self._settle_targets()
         if not targets:
             self._log("[PHYSICS][SETTLE] No hay objetos dinámicos configurados para monitorizar.")
             return False
-        start: Optional[float] = None
         pose_wait_start = time.time()
         stable_since: Dict[str, float] = {}
-        stable_ok: Dict[str, bool] = {name: False for name in targets}
-        has_fallen: Dict[str, bool] = {name: False for name in targets}
-        attached_since: Dict[str, float] = {}
-        attached_confirmed: Set[str] = set()
-        attach_rel: Dict[str, Tuple[float, float, float]] = {}
-        last_hand_pos: Optional[Tuple[float, float, float]] = None
-        poses_seen = False
-        spawn_positions = dict(self._spawn_positions_snapshot or {})
         last_positions: Dict[str, Tuple[float, float, float]] = {}
         last_block_log = 0.0
         last_pose_log = 0.0
-        last_state_log: Dict[str, float] = {}
-        state_log_period = 2.0
         if log_snapshot:
             self._log_settle_snapshot("inicio")
             self._settle_log_once_done = True
-        while self._gz_running and not self._closing and ((time.time() - start) < timeout if start else True):
+        while self._gz_running and not self._closing and (time.time() - pose_wait_start) < timeout:
             poses = self._read_world_pose_info(world_name)
             if not poses:
                 if (time.time() - pose_wait_start) >= timeout:
@@ -1354,35 +1379,8 @@ class ControlPanelV2(QMainWindow):
                     last_pose_log = time.time()
                 time.sleep(OBJECT_SETTLE_POLL_SEC)
                 continue
-            poses_seen = True
-            if start is None:
-                start = time.time()
             now = time.time()
             round_ok = True
-            pose_map: Dict[str, Tuple[float, float, float]] = {}
-            for pose in poses:
-                name = pose.get("name")
-                if not name:
-                    continue
-                position = pose.get("position") or {}
-                pose_map[name] = (
-                    float(position.get("x") or 0.0),
-                    float(position.get("y") or 0.0),
-                    float(position.get("z") or 0.0),
-                )
-            hand_pos = None
-            for key, pos in pose_map.items():
-                if any(key.endswith(f"::{cand}") or key == cand for cand in HAND_LINK_CANDIDATES):
-                    hand_pos = pos
-                    break
-            hand_moved = False
-            if hand_pos and last_hand_pos:
-                dxh = hand_pos[0] - last_hand_pos[0]
-                dyh = hand_pos[1] - last_hand_pos[1]
-                dzh = hand_pos[2] - last_hand_pos[2]
-                hand_moved = (dxh * dxh + dyh * dyh + dzh * dzh) ** 0.5 > ATTACH_HAND_MOVE_EPS
-            if hand_pos:
-                last_hand_pos = hand_pos
             for pose in poses:
                 name = pose.get("name")
                 if name not in targets:
@@ -1392,86 +1390,29 @@ class ControlPanelV2(QMainWindow):
                 y = float(position.get("y") or 0.0)
                 z = float(position.get("z") or 0.0)
                 prev = last_positions.get(name)
-                dz = z - prev[2] if prev else 0.0
-                dx = x - prev[0] if prev else 0.0
-                dy = y - prev[1] if prev else 0.0
-                spawn_z = spawn_positions.get(name, (x, y, z))[2]
-                if (spawn_z - z) > OBJECT_FALL_Z_EPS:
-                    has_fallen[name] = True
-                require_fall = any(name.startswith(p) for p in SETTLE_PATTERNS)
-                if not require_fall:
-                    has_fallen[name] = True
-                if hand_pos and name in DROP_OBJECT_NAMES:
-                    dxh = x - hand_pos[0]
-                    dyh = y - hand_pos[1]
-                    dzh = z - hand_pos[2]
-                    dist = (dxh * dxh + dyh * dyh + dzh * dzh) ** 0.5
-                    if dist <= ATTACH_DIST_M:
-                        prev_rel = attach_rel.get(name)
-                        rel = (dxh, dyh, dzh)
-                        rel_ok = True
-                        if prev_rel:
-                            dr = (
-                                (rel[0] - prev_rel[0]) ** 2
-                                + (rel[1] - prev_rel[1]) ** 2
-                                + (rel[2] - prev_rel[2]) ** 2
-                            ) ** 0.5
-                            rel_ok = dr <= ATTACH_REL_EPS
-                        attach_rel[name] = rel
-                        if rel_ok and (hand_moved or dist <= ATTACH_SNAP_EPS):
-                            attached_since.setdefault(name, now)
-                            if (now - attached_since[name]) >= ATTACH_WINDOW_SEC:
-                                attached_confirmed.add(name)
-                        else:
-                            attached_since.pop(name, None)
-                    else:
-                        attached_since.pop(name, None)
-                stable = bool(prev) and abs(dz) <= OBJECT_SETTLE_Z_EPS and abs(dx) <= OBJECT_SETTLE_XY_EPS and abs(dy) <= OBJECT_SETTLE_XY_EPS
-                if name in attached_confirmed:
-                    has_fallen[name] = False
-                    stable_ok[name] = False
+                if not prev:
                     stable_since.pop(name, None)
-                elif not has_fallen.get(name, False):
-                    stable_ok[name] = False
-                    stable_since.pop(name, None)
-                elif stable:
-                    if name not in stable_since:
-                        stable_since[name] = now
-                    elif (now - stable_since[name]) >= OBJECT_SETTLE_WINDOW_SEC:
-                        stable_ok[name] = True
-                else:
-                    stable_ok[name] = False
-                    stable_since.pop(name, None)
-                last_positions[name] = (x, y, z)
-                last_log = last_state_log.get(name, 0.0)
-                if (now - last_log) >= state_log_period:
-                    dz_from_spawn = spawn_z - z
-                    stable_flag = bool(has_fallen.get(name, False) and stable_ok.get(name, False))
-                    self._emit_log(
-                        f"[PHYSICS][SETTLE] model={name} z={z:.3f} dz={dz_from_spawn:.3f} "
-                        f"has_fallen={has_fallen.get(name, False)} stable={stable_flag}"
-                    )
-                    last_state_log[name] = now
-                if not (has_fallen.get(name, False) and stable_ok.get(name, False)):
                     round_ok = False
+                else:
+                    dx = x - prev[0]
+                    dy = y - prev[1]
+                    dz = z - prev[2]
+                    stable = abs(dx) < OBJECT_SETTLE_XY_EPS and abs(dy) < OBJECT_SETTLE_XY_EPS and abs(dz) < OBJECT_SETTLE_Z_EPS
+                    if stable:
+                        if name not in stable_since:
+                            stable_since[name] = now
+                        elif (now - stable_since[name]) < OBJECT_SETTLE_WINDOW_SEC:
+                            round_ok = False
+                    else:
+                        stable_since.pop(name, None)
+                        round_ok = False
+                last_positions[name] = (x, y, z)
             if round_ok and targets:
-                self._objects_seen_fall = True
                 return True
             if (now - last_block_log) >= 1.8:
                 self._log_calib_blocked("esperando caída/estabilidad de objetos")
                 last_block_log = now
             time.sleep(OBJECT_SETTLE_POLL_SEC)
-        if poses_seen:
-            for name in sorted(attached_confirmed):
-                self._emit_log(f"[PHYSICS][ATTACH] model={name} attached=true")
-            for name in sorted(targets):
-                require_fall = any(name.startswith(p) for p in SETTLE_PATTERNS)
-                if require_fall and not has_fallen.get(name, False):
-                    self._emit_log(
-                        f"[PHYSICS][SETTLE] model={name} has_fallen=false -> revisar SDF: static/kinematic/gravity/inertial/joint"
-                    )
-                else:
-                    self._emit_log(f"[PHYSICS][SETTLE] model={name} has_fallen=true stable={stable_ok.get(name, False)}")
         return False
 
     def _build_ui(self) -> None:
@@ -2044,6 +1985,9 @@ class ControlPanelV2(QMainWindow):
         self._tf_ready_state = ready
         if not ready:
             self._trace_ready = False
+            self._invalidate_calibration("TF no disponible")
+            if self._flow_state != FlowState.WAIT_TF:
+                self._set_flow_state(FlowState.WAIT_TF, "esperando TF")
         self._evaluate_system_state()
         self._refresh_controls()
 
@@ -2089,6 +2033,12 @@ class ControlPanelV2(QMainWindow):
         if reason and self._debug_logs_enabled:
             self._emit_log(f"[MOVEIT] {state_enum.value}: {reason}")
         self._update_moveit_status_label()
+        if state_enum == MoveItState.READY and self._flow_state in (
+            FlowState.AUTO_CALIBRATED,
+            FlowState.UPDATE_OBJECT_LIST,
+        ):
+            if self._pickable_map_override:
+                self._set_flow_state(FlowState.READY, "sistema listo")
         self._refresh_controls()
 
     @pyqtSlot()
@@ -2105,25 +2055,9 @@ class ControlPanelV2(QMainWindow):
     def _on_calibration_check(self) -> None:
         if self._calibration_ready:
             return
-        if not self._objects_settled and not ALLOW_UNSETTLED_ON_TIMEOUT:
-            self._log_calib_blocked("esperando caída/estabilidad de objetos")
-            return
-        if not self._pose_info_ok:
-            self._log_calib_blocked("pose/info no disponible")
-            return
-        if not self._tf_ready_state:
-            self._log_calib_blocked("TF world->base_link no disponible")
-            return
-        if self._camera_required and not self._camera_stream_ok:
-            self._log_calib_blocked("cámara no publica")
-            return
-        self._log("[CALIB] Inicializando calibración tras bridge")
-        self._load_table_calibration()
-        self._refresh_objects_from_gz_async()
-        QTimer.singleShot(1500, self._refresh_objects_from_gz_async)
-        QTimer.singleShot(4000, self._refresh_objects_from_gz_async)
-        self._calibration_ready = True
-        self.signal_calib_ready.emit(True)
+        if self._flow_state != FlowState.AUTO_CALIBRATE:
+            self._log_calib_blocked("Pulse Calibrar para auto calibrar")
+        return
 
     def _set_system_state(self, state: SystemState, reason: str) -> None:
         if self._system_state == state and self._system_state_reason == reason:
@@ -2131,6 +2065,32 @@ class ControlPanelV2(QMainWindow):
         self._system_state = state
         self._system_state_reason = reason
         self._emit_log(f"[STATE] {state.value} ({reason})")
+
+    def _set_flow_state(self, state: FlowState, reason: str) -> None:
+        if self._flow_state == state:
+            return
+        self._flow_state = state
+        if state in (FlowState.INIT, FlowState.WAIT_TF, FlowState.TEST_OK):
+            self._pickable_map_override = None
+        self._emit_log(f"[FLOW] {state.value} ({reason})")
+        if state == FlowState.READY:
+            self._emit_log("[STATE] READY")
+        self._set_status(f"Estado: {state.value} · {reason}", error=False)
+        self.signal_refresh_controls.emit()
+
+    def _invalidate_calibration(self, reason: str) -> None:
+        if self._flow_state in (
+            FlowState.AUTO_CALIBRATED,
+            FlowState.UPDATE_OBJECT_LIST,
+            FlowState.READY,
+        ):
+            self._auto_calib_objects = []
+            self._calib_mode = None
+            self._pickable_map_override = None
+            self._calibration_ready = False
+            next_state = FlowState.WAIT_TF if "TF" in reason else FlowState.TEST_OK
+            self._set_flow_state(next_state, reason)
+            self.signal_update_objects.emit()
 
     def _evaluate_system_state(self) -> None:
         if self._system_error_reason:
@@ -2194,6 +2154,8 @@ class ControlPanelV2(QMainWindow):
         return self._system_state == SystemState.READY_MOVEIT
 
     def _manual_control_ready(self) -> bool:
+        if self._flow_state != FlowState.READY:
+            return False
         return self._gazebo_state() == "GAZEBO_READY" and self._controllers_ok
 
     def _moveit_control_ready(self) -> bool:
@@ -2207,7 +2169,8 @@ class ControlPanelV2(QMainWindow):
 
     def _pick_ui_allowed(self) -> bool:
         return (
-            self._manual_control_ready()
+            self._flow_state == FlowState.READY
+            and self._manual_control_ready()
             and self._pose_info_ok
             and (self._camera_stream_ok or not self._camera_required)
             and self._tf_ready_state
@@ -2955,6 +2918,8 @@ class ControlPanelV2(QMainWindow):
         """Auto-conectar cámara al iniciar el panel."""
         if not self._bridge_running:
             return
+        if self._script_motion_active:
+            return
         if self._camera_subscribed:
             return
         if not self.ros_worker.node_ready():
@@ -3078,13 +3043,17 @@ class ControlPanelV2(QMainWindow):
         with self._camera_frame_lock:
             frame = self._camera_pending_frame
             self._camera_pending_frame = None
-        if not frame:
+        if not frame and self._last_camera_frame:
+            qimg, w, h, ts, fps = self._last_camera_frame
+            topic = self.camera_topic
+        elif not frame:
             return
-        topic, qimg, w, h, fps, ts = frame
-        self._last_camera_frame = (qimg, w, h, ts)
+        else:
+            topic, qimg, w, h, fps, ts = frame
+            self._last_camera_frame = (qimg, w, h, ts, float(fps))
         display = qimg
         if w > 0 and h > 0:
-            if self._calibrating or (time.time() <= self._calib_grid_until):
+            if time.time() <= self._calib_grid_until:
                 display = self._draw_calib_overlay(display, w, h)
             if self._reach_overlay_enabled:
                 display = self._draw_reach_overlay(display, w, h)
@@ -3114,8 +3083,10 @@ class ControlPanelV2(QMainWindow):
         stamp = float(payload.get("stamp") or 0.0)
         if stamp:
             self._last_joint_stamp = stamp
-        now = stamp or time.time()
+        wall_now = time.time()
+        now = stamp or wall_now
         self._joint_active = True
+        self._last_joint_wall = wall_now
 
         norm_names = [_normalize_joint_name(n) for n in names]
         pos_map: Dict[str, float] = {}
@@ -3440,6 +3411,7 @@ class ControlPanelV2(QMainWindow):
             return
         if not self._ros_worker_started:
             self._ensure_ros_worker_started()
+        self._invalidate_calibration("gazebo reiniciado")
         gz_state = self._gazebo_state()
         if gz_state != "GAZEBO_OFF":
             self._log_error(f"Gazebo ya activo ({gz_state})")
@@ -3815,6 +3787,27 @@ class ControlPanelV2(QMainWindow):
         self._detach_feature_available = False
         return False
 
+    def _force_detach_all(self, reason: str, attempts: int = 3, sleep_s: float = 0.08) -> None:
+        """Publica detach directo para evitar uniones fantasma durante tests."""
+        if not ROS_AVAILABLE or self._moveit_node is None:
+            self._emit_log(f"[PHYSICS][DETACH] skip (ROS no listo) reason={reason}")
+            return
+        if not self._drop_detach_supported():
+            self._emit_log(f"[PHYSICS][DETACH] skip (no attach/detach) reason={reason}")
+            return
+        self._objects_release_done = False
+        prefix = GRIPPER_ATTACH_PREFIX.rstrip("/")
+        names = list(ATTACHABLE_OBJECTS)
+        self._emit_log(f"[PHYSICS][DETACH] force reason={reason} objs={len(names)}")
+        for _idx in range(max(1, attempts)):
+            for name in names:
+                topic = f"{prefix}/{name}/detach"
+                pub = self._get_attach_publisher(topic)
+                if pub is not None:
+                    pub.publish(Empty())
+            if sleep_s > 0.0:
+                time.sleep(sleep_s)
+
     def _release_objects(self):
         """Publicar detach a todos los objetos en Gazebo (emergencia)."""
         if self._objects_release_done:
@@ -3867,9 +3860,11 @@ class ControlPanelV2(QMainWindow):
                     return
                 self._objects_release_done = True
                 self._objects_settled = False
+                self._settle_locked = False
                 self.signal_refresh_controls.emit()
                 self._ui_set_status("✅ Objetos soltados")
                 self._invalidate_settle("objetos liberados", restart=True)
+                self._invalidate_calibration("objetos liberados")
             except Exception as e:
                 self._log_error(f"Soltar objetos error: {e}")
                 self._ui_set_status(f"Error soltando objetos: {e}", error=True)
@@ -3942,10 +3937,14 @@ class ControlPanelV2(QMainWindow):
         self._objects_settled = False
         self._objects_seen_fall = False
         self._objects_release_done = False
+        self._settle_locked = False
         self._trace_ready = False
         self._tf_ready_state = False
         self._controllers_ok = False
         self._controllers_reason = "gazebo detenido"
+        self._tf_probe_ok_cycles = 0
+        self._tf_probe_logged_world_base = False
+        self._tf_probe_logged_base_tool = False
         self._detach_inflight = False
         self._detach_attempted = False
         self._detach_auto_disabled = False
@@ -4988,19 +4987,24 @@ class ControlPanelV2(QMainWindow):
         
         # Habilitar/deshabilitar controles dependiendo del estado del bridge
         # Cámara: habilitada solo cuando el bridge está activo
-        camera_enabled = bridge_active
+        camera_enabled = bridge_active and not self._script_motion_active
         self.camera_topic_combo.setEnabled(camera_enabled)
         self.btn_camera_refresh.setEnabled(camera_enabled)
         self.btn_camera_connect.setEnabled(camera_enabled)
-        calib_settled_ok = self._objects_settled or AUTO_CALIB_FROM_CAMERA
-        self.btn_calibrate.setEnabled(
+        calib_settled_ok = self._objects_settled
+        auto_calib_enabled = (
             camera_enabled
             and not system_error
             and calib_settled_ok
-            and self._camera_stream_ok
+            and self._flow_state == FlowState.WAIT_STABLE
+            and self._robot_reach_radius is not None
+            and bool(self._robot_height_limits)
+            and bool(self._robot_workspace_frame)
             and self._pose_info_ok
             and self._tf_ready_state
+            and self._camera_stream_ok
         )
+        self.btn_calibrate.setEnabled(auto_calib_enabled)
         
         # Control manual: solo Gazebo READY + controladores activos
         manual_enabled = self._manual_control_ready() and not self._script_motion_active
@@ -5020,14 +5024,27 @@ class ControlPanelV2(QMainWindow):
         # Botones de movimiento: control directo (sin MoveIt)
         motion_enabled = self._manual_control_ready() and not self._script_motion_active
         motion_tip = "" if motion_enabled else f"Bloqueado: {basic_reason}"
-        self._set_btn_state(self.btn_test_robot, motion_enabled, motion_tip)
+        test_enabled = (
+            bridge_active
+            and not system_error
+            and not self._script_motion_active
+            and self._tf_ready_state
+            and self._flow_state == FlowState.WAIT_TF
+        )
+        test_tip = "" if test_enabled else "Bloqueado: TF no listo"
+        self._set_btn_state(self.btn_test_robot, test_enabled, test_tip)
         self._set_btn_state(self.btn_home, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_table, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_basket, motion_enabled, motion_tip)
         self._set_btn_state(self.btn_gripper, motion_enabled, motion_tip)
         self._schedule_controller_check()
         moveit_ready = self._moveit_ready()
-        pick_enabled = self._moveit_control_ready() and bool(self._ee_frame_effective)
+        pick_enabled = (
+            self._flow_state == FlowState.READY
+            and self._moveit_control_ready()
+            and bool(self._ee_frame_effective)
+            and bool(self._pickable_map_override)
+        )
         pick_tip = "Requiere MoveIt, cámara y objetos estables"
         self._set_btn_state(self.btn_pick_demo, pick_enabled, pick_tip)
         # RELAXED GATING FOR DEMO PICK
@@ -5188,6 +5205,8 @@ class ControlPanelV2(QMainWindow):
         """Mover a HOME ajustando joint2 un -20% (sentido negativo) al lanzar Gazebo."""
         if self._auto_joint2_move_done:
             return
+        if self._flow_state == FlowState.INIT:
+            return
         self._schedule_controller_check()
         if not self._bridge_running:
             if retries > 0:
@@ -5269,31 +5288,91 @@ class ControlPanelV2(QMainWindow):
         if self._script_motion_active:
             self._set_status("TEST ROBOT en curso; espera", error=False)
             return
-        if not self._require_manual_ready("TEST ROBOT"):
+        self._auto_calib_objects = []
+        self._calib_mode = None
+        self._pickable_map_override = None
+        self._calibration_ready = False
+        def _fail_test(msg: str, log_msg: str) -> None:
+            self._set_status(msg, error=True)
+            self._emit_log(log_msg)
+            self._set_flow_state(FlowState.WAIT_TF, "test falló")
+        if not self.ros_worker or not self.ros_worker.node_ready():
+            _fail_test("TEST ROBOT falló: ROS no listo", "[TEST] ROS no listo")
+            return
+        if not self._controllers_ok:
+            reason = self._controllers_reason or "controladores no listos"
+            _fail_test(f"TEST ROBOT falló: {reason}", f"[TEST] controladores no listos: {reason}")
+            return
+        if self._moveit_required and self._moveit_state != MoveItState.READY:
+            reason = self._moveit_state_reason or "MoveIt no listo"
+            _fail_test(f"TEST ROBOT falló: {reason}", f"[TEST] MoveIt no listo: {reason}")
+            return
+        if not self._pose_info_ok:
+            _fail_test("TEST ROBOT falló: pose/info no disponible", "[TEST] pose/info no disponible")
+            return
+        if not self._tf_ready_state:
+            _fail_test("TEST ROBOT falló: TF world→base_link no disponible", "[TEST] TF world→base_link no disponible")
+            return
+        if not self._joint_active:
+            _fail_test("TEST ROBOT falló: sin /joint_states", "[TEST] sin joint_states")
+            return
+        age = time.time() - self._last_joint_wall if self._last_joint_wall else float("inf")
+        if age > 1.0:
+            _fail_test("TEST ROBOT falló: joint_states desfasado", f"[TEST] joint_states wall_age={age:.2f}s")
             return
         self._reach_overlay_enabled = True
         self._reach_overlay_points = []
         self._reach_overlay_size = (0, 0)
         self._set_motion_lock(True)
+
         move_sec = float(self.joint_time.value()) if self.joint_time else 3.0
+        yaw_span = math.radians(20.0)
+        left = list(JOINT_HOME_POSE_RAD)
+        right = list(JOINT_HOME_POSE_RAD)
+        left[0] = max(left[0] - yaw_span, -math.pi)
+        right[0] = min(right[0] + yaw_span, math.pi)
+        wrist_pitch = list(JOINT_HOME_POSE_RAD)
+        wrist_pitch[4] = math.radians(20.0)
+        wrist_roll = list(JOINT_HOME_POSE_RAD)
+        wrist_roll[5] = math.radians(90.0)
+
         sequence = [
             ("HOME", JOINT_HOME_POSE_RAD),
-            ("Mesa", JOINT_TABLE_POSE_RAD),
-            ("Cesta", JOINT_BASKET_POSE_RAD),
+            ("HOME_YAW_LEFT", left),
+            ("HOME_YAW_RIGHT", right),
+            ("WRIST_PITCH", wrist_pitch),
+            ("WRIST_ROLL", wrist_roll),
             ("HOME", JOINT_HOME_POSE_RAD),
         ]
 
         def worker():
             try:
+                self._force_detach_all("test_robot_start")
                 for label, pose in sequence:
                     self._ui_set_status(f"TEST ROBOT: {label}…")
                     ok, info = self._publish_joint_trajectory(pose, move_sec)
                     if not ok:
                         self._ui_set_status(f"TEST ROBOT falló: {label} ({info})", error=True)
-                        self._log_warning(f"[ROBOT] TEST ROBOT falló en {label}: {info}")
+                        self._emit_log(f"[TEST] fallo {label}: {info}")
                         return
-                    time.sleep(move_sec + 0.15)
+                    time.sleep(move_sec + 0.2)
+                self._force_detach_all("test_robot_end")
+                table_top = self._resolve_table_top_z()
+                self._robot_reach_radius = UR5_REACH_RADIUS
+                self._robot_height_limits = (UR5_BASE_Z, max(UR5_BASE_Z + 1.2, table_top + 0.4))
+                self._robot_workspace_frame = "base_link"
+                self._emit_log(
+                    f"[TEST] reach={self._robot_reach_radius:.3f} "
+                    f"height=({self._robot_height_limits[0]:.3f},{self._robot_height_limits[1]:.3f}) "
+                    f"frame={self._robot_workspace_frame}"
+                )
+                self._set_flow_state(FlowState.TEST_OK, "test inicial OK")
                 self._ui_set_status("TEST ROBOT completado")
+                self._set_flow_state(FlowState.WAIT_STABLE, "esperando estabilidad")
+                self._settle_locked = False
+                self.signal_start_objects_settle_watch.emit()
+                if self._objects_settled:
+                    self._emit_log("[FLOW] OBJECTS_STABLE")
             finally:
                 self._set_motion_lock(False)
 
@@ -5350,7 +5429,7 @@ class ControlPanelV2(QMainWindow):
         marker.id = 0
         marker.type = Marker.LINE_LIST
         marker.action = Marker.ADD
-        marker.scale.x = 0.004
+        marker.scale.x = 0.0025
         marker.color.r = 0.12
         marker.color.g = 0.40
         marker.color.b = 0.96
@@ -5418,6 +5497,7 @@ class ControlPanelV2(QMainWindow):
             radius = None
             model_pose = _parse_pose(model.findtext("pose") or "")
             link = model.find("link")
+            link_pose = _parse_pose(link.findtext("pose") or "") if link is not None else (0.0, 0.0, 0.0)
             if link is not None:
                 collision = link.find("collision")
                 if collision is None:
@@ -5460,33 +5540,133 @@ class ControlPanelV2(QMainWindow):
                 "pose": model_pose,
             }
             self._sdf_model_cache[name] = data
-            if name == "mesa_pro" and size and len(size) == 3:
-                link_pose = _parse_pose(link.findtext("pose") or "")
-                top = model_pose[2] + link_pose[2] + (size[2] / 2.0)
-                self._table_top_z = top
+            if name == "mesa_pro" and link is not None:
+                best_top = None
+                best_area = -1.0
+                for coll in link.findall("collision"):
+                    geom = coll.find("geometry") if coll is not None else None
+                    box = geom.find("box") if geom is not None else None
+                    if box is None:
+                        continue
+                    size_text = box.findtext("size") or ""
+                    parts = [p for p in size_text.split() if p]
+                    if len(parts) != 3:
+                        continue
+                    try:
+                        coll_size = tuple(float(p) for p in parts)
+                    except Exception:
+                        continue
+                    coll_pose = _parse_pose(coll.findtext("pose") or "")
+                    top = model_pose[2] + link_pose[2] + coll_pose[2] + (coll_size[2] / 2.0)
+                    coll_name = (coll.attrib.get("name") or "").lower()
+                    if "tablero" in coll_name:
+                        best_top = top
+                        break
+                    area = coll_size[0] * coll_size[1]
+                    if area > best_area:
+                        best_area = area
+                        best_top = top
+                if best_top is not None:
+                    self._table_top_z = best_top
 
     def _post_calibration_pipeline(self) -> None:
-        objects = self._build_object_report()
+        if self._flow_state.value not in (
+            FlowState.AUTO_CALIBRATED.value,
+            FlowState.PROCESS_OBJECTS.value,
+            FlowState.UPDATE_OBJECT_LIST.value,
+            FlowState.READY.value,
+        ):
+            return
+        if self._calib_mode == "AUTO":
+            objects = list(self._auto_calib_objects)
+        else:
+            objects = self._build_object_report()
         if objects:
+            self._sync_object_positions_from_report(objects)
             self._log_object_report(objects)
             self._pickable_map_override = {obj["id"]: obj["pickable"] for obj in objects}
         else:
-            self._pickable_map_override = None
+            self._pickable_map_override = {}
+        if self._flow_state in (FlowState.AUTO_CALIBRATED, FlowState.PROCESS_OBJECTS):
+            self._set_flow_state(FlowState.UPDATE_OBJECT_LIST, "lista de objetos actualizada")
+        if self._pickable_map_override and self._tf_ready_state:
+            self._set_flow_state(FlowState.READY, "sistema listo")
+        elif self._flow_state == FlowState.UPDATE_OBJECT_LIST:
+            self._set_flow_state(FlowState.AUTO_CALIBRATED, "sin objetos alcanzables")
         self.signal_update_objects.emit()
 
+    def _sync_object_positions_from_report(self, objects: List[Dict[str, object]]) -> None:
+        updates: Dict[str, Tuple[float, float, float]] = {}
+        for obj in objects:
+            name = obj.get("id")
+            pose = obj.get("pose") or []
+            if not name or len(pose) < 3:
+                continue
+            try:
+                updates[str(name)] = (float(pose[0]), float(pose[1]), float(pose[2]))
+            except Exception:
+                continue
+        if not updates:
+            return
+        bulk_update_object_positions(updates, allow_new=True)
+        existing = get_object_positions()
+        for name in list(existing.keys()):
+            if name not in updates:
+                remove_object_position(name)
+        save_object_positions()
+
     def _build_object_report(self) -> List[Dict[str, object]]:
-        from .panel_utils import get_object_positions, visible_table_object, get_object_pose_gz
+        from .panel_utils import get_object_positions, get_object_pose_gz
 
         self._load_sdf_geometry_cache()
         table_top = self._resolve_table_top_z()
         objects = []
-        positions = get_object_positions()
+        positions: Dict[str, Tuple[float, float, float]] = {}
+        world_name = self._resolve_world_name()
+        poses = self._read_world_pose_info(world_name)
+        if not poses:
+            return objects
+        total_detected = 0
+        total_on_table = 0
+        total_reachable = 0
+        model_blacklist = {
+            "ground_plane",
+            "mesa_pro",
+            "mesa_robot",
+            "bandeja_deposito",
+            "camera_overhead",
+            "camera_north",
+            "camera_east",
+            "camera_south",
+            "camera_west",
+            UR5_MODEL_NAME,
+        }
+        for pose in poses:
+            if not isinstance(pose, dict):
+                continue
+            name = pose.get("name")
+            pos = pose.get("position") or {}
+            if not name or not isinstance(pos, dict):
+                continue
+            base_name = name.split("::")[0] if isinstance(name, str) else ""
+            if base_name in model_blacklist:
+                continue
+            try:
+                x = float(pos.get("x"))
+                y = float(pos.get("y"))
+                z = float(pos.get("z"))
+            except (TypeError, ValueError):
+                continue
+            positions[base_name or name] = (x, y, z)
+        total_detected = len(positions)
+        self._log(f"[CALIB] objetos detectados desde pose/info ({total_detected})")
         if not positions:
             return objects
         for name, (x, y, z) in sorted(positions.items()):
-            if not visible_table_object(name, (x, y, z)):
-                continue
             sdf = self._sdf_model_cache.get(name, {})
+            if not sdf or not sdf.get("type"):
+                self._load_sdf_geometry_cache()
+                sdf = self._sdf_model_cache.get(name, {})
             geom_type = sdf.get("type") or "desconocido"
             size = sdf.get("size")
             radius = sdf.get("radius")
@@ -5498,8 +5678,13 @@ class ControlPanelV2(QMainWindow):
                 height = float(length)
             elif geom_type == "sphere" and radius:
                 height = float(radius) * 2.0
-            if height:
-                z = table_top + (height / 2.0)
+            if height is None:
+                continue
+            expected_z = table_top + (height / 2.0)
+            if abs(z - expected_z) > 0.03:
+                continue
+            z = expected_z
+            total_on_table += 1
             yaw = 0.0
             pose = get_object_pose_gz(name)
             if pose and isinstance(pose, dict):
@@ -5512,17 +5697,33 @@ class ControlPanelV2(QMainWindow):
                 )
                 yaw = yaw_from_quaternion(type("Q", (), {"x": quat[0], "y": quat[1], "z": quat[2], "w": quat[3]})())
 
+            coords, _tf = transform_point_to_frame(
+                (float(x), float(y), float(z)),
+                "base_link",
+                source_frame=WORLD_FRAME or "world",
+            )
+            if not coords:
+                self._log_warning(f"[TF] No se pudo transformar {name} a base_link")
+                continue
+
             pickable, reason = self._is_pickable(name, x, y, z, table_top, positions)
+            if pickable:
+                total_reachable += 1
             tipo = "cubo" if geom_type == "box" else "cilindro" if geom_type == "cylinder" else "prisma"
             objects.append(
                 {
                     "id": name,
                     "tipo": tipo,
                     "pose": [round(x, 3), round(y, 3), round(z, 3), round(yaw, 3)],
+                    "pose_base": [round(coords[0], 3), round(coords[1], 3), round(coords[2], 3)],
+                    "base_frame": "base_link",
                     "pickable": pickable,
                     "motivo": reason,
                 }
             )
+        if poses:
+            self._log(f"[CALIB] objetos sobre la mesa ({total_on_table})")
+            self._log(f"[CALIB] objetos dentro de alcance ({total_reachable})")
         return objects
 
     def _is_pickable(
@@ -5534,19 +5735,27 @@ class ControlPanelV2(QMainWindow):
         table_top: float,
         positions: Dict[str, Tuple[float, float, float]],
     ) -> Tuple[bool, Optional[str]]:
-        dx = x - UR5_BASE_X
-        dy = y - UR5_BASE_Y
+        base_frame = "base_link"
+        coords, _tf = transform_point_to_frame(
+            (float(x), float(y), float(z)),
+            base_frame,
+            source_frame=WORLD_FRAME or "world",
+        )
+        if not coords:
+            self._emit_log(f"[REACH] obj={name} base=(n/a) dist_xy=n/a reach={self._robot_reach_radius or UR5_REACH_RADIUS:.2f} -> reachable=false")
+            return False, "tf_no_disponible"
+        dx, dy, dz = coords
         dist = (dx * dx + dy * dy) ** 0.5
-        if dist > (UR5_REACH_RADIUS - 0.02):
+        reach = self._robot_reach_radius or UR5_REACH_RADIUS
+        z_min, z_max = self._robot_height_limits or (float("-inf"), float("inf"))
+        reachable = dist <= reach and z_min <= dz <= z_max
+        self._emit_log(
+            f"[REACH] obj={name} base=({dx:.3f},{dy:.3f},{dz:.3f}) dist_xy={dist:.3f} reach={reach:.2f} -> reachable={str(reachable).lower()}"
+        )
+        if dist > reach:
             return False, "fuera_de_alcance"
-        pre_grasp_z = z + PICKABLE_PRE_GRASP_Z
-        if pre_grasp_z <= (table_top + 0.05):
-            return False, "pregrasp_bajo"
-        for other, (ox, oy, _oz) in positions.items():
-            if other == name:
-                continue
-            if (ox - x) ** 2 + (oy - y) ** 2 < (PICKABLE_MIN_CLEARANCE ** 2):
-                return False, "colision_con_objetos"
+        if dz < z_min or dz > z_max:
+            return False, "altura_fuera"
         return True, None
 
     def _log_object_report(self, objects: List[Dict[str, object]]) -> None:
@@ -5617,12 +5826,7 @@ class ControlPanelV2(QMainWindow):
             return
         if not self._pick_ui_allowed():
             return
-        # Prioridad 1: Si está calibrando, manejar calibración
-        if self._calibrating:
-            self._handle_calibration_click(px, py)
-            return
-        
-        # Prioridad 2: Si hay calibración válida, seleccionar objeto
+        # Selección de objeto basada en homografía cargada
         self._handle_object_selection_click(px, py)
 
     def _load_table_calibration(self):
@@ -5660,12 +5864,7 @@ class ControlPanelV2(QMainWindow):
     def _refresh_objects_from_gz_async(self):
         threading.Thread(target=self._refresh_objects_from_gz, daemon=True).start()
 
-    def _refresh_objects_from_gz(self):
-        """Sincronizar poses de objetos desde Gazebo (igual a Panel Only)."""
-        if not gz_sim_status()[0]:
-            return
-        self._ensure_pose_subscription()
-
+    def _resolve_world_name(self) -> str:
         world_path = self.world_combo.currentText().strip()
         sdf_path = ""
         if world_path and os.path.isfile(world_path):
@@ -5681,8 +5880,21 @@ class ControlPanelV2(QMainWindow):
                     if os.path.isfile(c):
                         sdf_path = c
                         break
+        return read_world_name(sdf_path) if sdf_path else GZ_WORLD
 
-        world_name = read_world_name(sdf_path) if sdf_path else GZ_WORLD
+    def _refresh_objects_from_gz(self):
+        """Sincronizar poses de objetos desde Gazebo (igual a Panel Only)."""
+        if not gz_sim_status()[0]:
+            return
+        if self._calib_mode == "AUTO" and self._flow_state in (
+            FlowState.AUTO_CALIBRATED,
+            FlowState.UPDATE_OBJECT_LIST,
+            FlowState.READY,
+        ):
+            return
+        self._ensure_pose_subscription()
+
+        world_name = self._resolve_world_name()
         poses = self._read_world_pose_info(world_name)
         if not poses:
             env_base = (
@@ -5791,162 +6003,112 @@ class ControlPanelV2(QMainWindow):
         return out
 
     def _start_calibration(self):
-        """Iniciar/Desactivar calibración manual mostrando la grilla."""
+        """Auto calibración (único modo)."""
         self._log_button("Calibrar")
-        from .panel_utils import load_table_calib, TABLE_CALIB_PATH
-
-        self._capture_calibration_frame()
-        if AUTO_CALIB_FROM_CAMERA and not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
-            if self._auto_calibrate_from_camera():
-                return
-
-        if not self._objects_settled:
-            self._request_settle_snapshot("calibrar")
-            self._log_calib_blocked("esperando caída/estabilidad de objetos")
-            self._set_status("Esperando caída/estabilización de objetos", error=False)
+        if self._flow_state != FlowState.WAIT_STABLE:
+            self._set_status("Auto calibración bloqueada: espera estabilidad", error=True)
+            self._emit_log("[CALIB] Bloqueada: esperando estabilidad")
+            return
+        if self._robot_reach_radius is None:
+            self._set_status("Auto calibración bloqueada: alcance no definido", error=True)
+            return
+        if not self._robot_height_limits:
+            self._set_status("Auto calibración bloqueada: límites de altura no definidos", error=True)
+            return
+        if not self._robot_workspace_frame:
+            self._set_status("Auto calibración bloqueada: base_frame no definido", error=True)
+            return
+        if not self._tf_ready_state:
+            self._set_status("Auto calibración bloqueada: TF no listo", error=True)
             return
         if not self._pose_info_ok:
-            self._log_calib_blocked("pose/info no disponible")
-            self._set_status("Esperando pose/info", error=False)
+            self._set_status("Auto calibración bloqueada: pose/info no disponible", error=True)
+            return
+        if not self._objects_settled:
+            self._request_settle_snapshot("auto_calibrar")
+            self._set_status("Esperando caída/estabilización de objetos", error=False)
+            return
+        overhead_topic = os.environ.get("PANEL_OVERHEAD_TOPIC", "/camera_overhead/image").strip()
+        if overhead_topic and self.camera_topic != overhead_topic:
+            idx = self.camera_topic_combo.findText(overhead_topic)
+            if idx < 0:
+                self.camera_topic_combo.addItem(overhead_topic)
+                idx = self.camera_topic_combo.findText(overhead_topic)
+            if idx >= 0:
+                self.camera_topic_combo.setCurrentIndex(idx)
+            else:
+                self.camera_topic_combo.setEditText(overhead_topic)
+            self._set_status("Auto calibración requiere cámara overhead", error=False)
+            self._connect_camera()
             return
         if self._camera_required and not self._camera_stream_ok:
-            self._log_calib_blocked("cámara no publica")
-            self._set_status("Esperando cámara", error=False)
+            self._set_status("Esperando cámara overhead", error=False)
             return
-        
-        # Si está en modo calibración, desactivar
-        if self._calibrating:
-            self._calibrating = False
-            self._calib_points = []
-            self._calib_grid_until = 0.0
-            self.btn_calibrate.setText("Calibrar")
-            self._set_status("Calibración desactivada", error=False)
-            self._log("[CALIB] Calibración desactivada")
+        self._capture_calibration_frame()
+        self._auto_calib_objects = []
+        self._calib_mode = "AUTO"
+        self._set_flow_state(FlowState.AUTO_CALIBRATE, "auto calibrar")
+        self.signal_update_objects.emit()
+        if not self._auto_calibrate_from_camera():
+            self._set_status("Auto calibración falló", error=True)
+            self._set_flow_state(FlowState.TEST_OK, "auto calibración fallida")
             return
-
-        # Si ya hay calibración en archivo, permitir recalibración manual igualmente.
-        try:
-            calib = load_table_calib()
-            if calib:
-                self._log(f"[CALIB] Calibración existente ({TABLE_CALIB_PATH}); iniciando modo manual")
-                self._set_status("Calibración existente; iniciando modo manual", error=False)
-        except Exception as e:
-            self._log(f"[CALIB] Aviso: no se pudo leer calibración guardada ({e}), se ofrece modo manual")
-        
-        # Iniciar calibración
-        if not self._camera_subscribed:
-            self._set_status("Conecta la cámara antes de calibrar", error=True)
-            return
-
-        self._calibrating = True
-        self._calib_points = []
-        self._selected_object = None
-        self._selected_px = None
-        self._selected_world = None
-        self._calib_grid_until = time.time() + 1.0
-        self.calib_service.start_calibration(self.camera_topic, CalibrationMode.LINEAR_2PT)
-        self.btn_calibrate.setText("✓ Calibrar (activo - click para desactivar)")
-        self._set_status("CALIBRACIÓN: Click en 4 esquinas de la mesa (arriba-izq, arriba-der, abajo-der, abajo-izq)", error=False)
-        self._log("[CALIB] Calibración manual 4 puntos (grid activo)")
+        self._set_flow_state(FlowState.PROCESS_OBJECTS, "procesando objetos")
+        objects = self._build_object_report()
+        pickable_objs = [obj for obj in objects if obj.get("pickable")]
+        base_frame = self._base_frame_effective or BASE_FRAME or "base_link"
+        for obj in pickable_objs:
+            pose = obj.get("pose") or []
+            if len(pose) < 3:
+                continue
+            coords, _tf = transform_point_to_frame(
+                (float(pose[0]), float(pose[1]), float(pose[2])), base_frame, WORLD_FRAME or "world"
+            )
+            if coords:
+                obj["pose_base"] = [round(coords[0], 3), round(coords[1], 3), round(coords[2], 3)]
+        self._auto_calib_objects = pickable_objs
+        self._set_flow_state(FlowState.AUTO_CALIBRATED, "auto calibración")
+        self._post_calibration_pipeline()
 
     def _capture_calibration_frame(self) -> None:
         """Captura la última imagen disponible para trazabilidad."""
         if not self._last_camera_frame:
             self._log("[CALIB] Imagen no disponible para captura")
             return
-        _qimg, w, h, ts = self._last_camera_frame
+        _qimg, w, h, ts, _fps = self._last_camera_frame
         self._log(f"[CALIB] Imagen capturada {w}x{h} age={time.time() - ts:.2f}s")
 
     def _auto_calibrate_from_camera(self) -> bool:
-        """Auto-calibrar usando la cámara overhead y la geometría de la mesa."""
-        from .panel_utils import (
-            load_table_calib,
-            TABLE_CALIB_PATH,
-            TABLE_CAM_INFO,
-            pixel_to_norm,
-        )
+        """Auto-calibrar cargando homografía existente."""
+        from .panel_utils import load_table_calib, TABLE_CALIB_PATH
 
         calib = load_table_calib()
-        if not calib or not TABLE_CAM_INFO:
+        if not calib:
+            self._log(f"[CALIB] Auto: no hay homografía en {TABLE_CALIB_PATH}")
             return False
-        w = getattr(self.camera_view, "_img_width", 0) if hasattr(self, "camera_view") else 0
-        h = getattr(self.camera_view, "_img_height", 0) if hasattr(self, "camera_view") else 0
-        if w <= 0 or h <= 0:
+        if isinstance(calib, list) and len(calib) == 3 and all(len(row) == 3 for row in calib):
             try:
-                w = int(TABLE_CAM_INFO.get("width") or 0)
-                h = int(TABLE_CAM_INFO.get("height") or 0)
+                mat = np.array(calib, dtype=float)
+                if abs(np.linalg.det(mat)) < 1e-6:
+                    self._log("[CALIB] Auto: homografía singular")
+                    return False
             except Exception:
-                w = 0
-                h = 0
-        if w <= 0 or h <= 0:
-            self._log("[CALIB] Auto: tamaño de imagen desconocido")
-            return False
-
-        table_z = 0.775
-        corners = [
-            (TABLE_CENTER_X - TABLE_SIZE_X / 2.0, TABLE_CENTER_Y + TABLE_SIZE_Y / 2.0, table_z),
-            (TABLE_CENTER_X + TABLE_SIZE_X / 2.0, TABLE_CENTER_Y + TABLE_SIZE_Y / 2.0, table_z),
-            (TABLE_CENTER_X + TABLE_SIZE_X / 2.0, TABLE_CENTER_Y - TABLE_SIZE_Y / 2.0, table_z),
-            (TABLE_CENTER_X - TABLE_SIZE_X / 2.0, TABLE_CENTER_Y - TABLE_SIZE_Y / 2.0, table_z),
-        ]
-        pixel_points = []
-        world_points = []
-        for x, y, z in corners:
-            pix = world_xyz_to_pixel(x, y, z, w, h)
-            if not pix:
-                self._log("[CALIB] Auto: no se pudo proyectar esquina de mesa")
+                self._log("[CALIB] Auto: homografía inválida")
                 return False
-            nx, ny = pixel_to_norm(pix[0], pix[1], w, h)
-            pixel_points.append((nx, ny))
-            world_points.append((x, y))
-
-        try:
-            hom = self._compute_homography(pixel_points, world_points)
-        except Exception as exc:
-            self._log(f"[CALIB] Auto: error calculando homografía: {exc}")
-            return False
-        if hom is None:
+        else:
             self._log("[CALIB] Auto: homografía inválida")
             return False
-
-        payload = {
-            "mode": "homography",
-            "h": hom,
-            "camera": TABLE_CAM_INFO,
-        }
-        try:
-            with open(TABLE_CALIB_PATH, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-        except Exception as exc:
-            self._log(f"[CALIB] Auto: no se pudo guardar {TABLE_CALIB_PATH}: {exc}")
-            return False
-
         self._load_table_calibration()
         self._calib_grid_until = time.time() + 1.0
-        self._calibrating = False
-        self._calib_points = []
+        self.btn_calibrate.setText("Calibrar")
         self._set_status("✅ Calibración auto aplicada", error=False)
         self._log("[CALIB] Auto: calibración guardada y cargada")
+        self._calibration_ready = True
+        self.signal_calib_ready.emit(True)
         self._publish_calib_grid_marker()
-        self._post_calibration_pipeline()
-        self._refresh_objects_from_gz_async()
+        QTimer.singleShot(0, self._refresh_camera_display)
         return True
 
-    @staticmethod
-    def _compute_homography(pixel_points: List[Tuple[float, float]], world_points: List[Tuple[float, float]]):
-        if len(pixel_points) < 4 or len(world_points) < 4:
-            return None
-        a_rows = []
-        for (u, v), (x, y) in zip(pixel_points, world_points):
-            a_rows.append([-u, -v, -1.0, 0.0, 0.0, 0.0, u * x, v * x, x])
-            a_rows.append([0.0, 0.0, 0.0, -u, -v, -1.0, u * y, v * y, y])
-        mat = np.array(a_rows, dtype=float)
-        _, _, v_t = np.linalg.svd(mat)
-        h = v_t[-1].reshape((3, 3))
-        if abs(h[2, 2]) > 1e-8:
-            h = h / h[2, 2]
-        return h.tolist()
-    
     def _draw_calib_overlay(self, qimg: QImage, w: int, h: int) -> QImage:
         """Dibujar malla y puntos de calibración sobre la imagen."""
         from PyQt5.QtGui import QPainter, QPen, QColor, QBrush
@@ -5961,8 +6123,8 @@ class ControlPanelV2(QMainWindow):
             if time.time() <= self._calib_grid_until:
                 # Dibujar malla de calibración (grid) - IGUAL A PANEL ONLY
                 # Usar coordenadas de mundo (0.025m steps) + tabla_xy_to_pixel para convertir a píxeles
-                pen = QPen(QColor(30, 64, 175, 180))
-                pen.setWidth(2)
+                pen = QPen(QColor(30, 64, 175, 140))
+                pen.setWidth(1)
                 painter.setPen(pen)
 
                 step_x = 0.025  # metros
@@ -5996,8 +6158,8 @@ class ControlPanelV2(QMainWindow):
                 p_br = table_xy_to_pixel(x_max, y_min, w, h)
                 p_bl = table_xy_to_pixel(x_min, y_min, w, h)
                 if p_tl and p_tr and p_br and p_bl:
-                    edge_pen = QPen(QColor(16, 185, 129, 200))
-                    edge_pen.setWidth(2)
+                    edge_pen = QPen(QColor(16, 185, 129, 180))
+                    edge_pen.setWidth(1)
                     painter.setPen(edge_pen)
                     painter.drawLine(QPointF(p_tl[0], p_tl[1]), QPointF(p_tr[0], p_tr[1]))
                     painter.drawLine(QPointF(p_tr[0], p_tr[1]), QPointF(p_br[0], p_br[1]))
@@ -6005,7 +6167,7 @@ class ControlPanelV2(QMainWindow):
                     painter.drawLine(QPointF(p_bl[0], p_bl[1]), QPointF(p_tl[0], p_tl[1]))
 
                 # Etiquetas básicas de ejes para visibilidad (mismo estilo Panel Only)
-                painter.setPen(QPen(QColor(30, 64, 175, 160)))
+                painter.setPen(QPen(QColor(30, 64, 175, 160), 1))
                 for label_x in (TABLE_CENTER_X - 0.4, TABLE_CENTER_X, TABLE_CENTER_X + 0.4):
                     p = table_xy_to_pixel(label_x, y_min, w, h)
                     if p:
@@ -6015,39 +6177,12 @@ class ControlPanelV2(QMainWindow):
                     if p:
                         painter.drawText(p[0] + 3, p[1] - 3, f"y={label_y:.1f}")
 
-            # Dibujar cada punto de calibración
-            for i, (px, py) in enumerate(self._calib_points):
-                # Cruz roja
-                painter.setPen(QPen(QColor(255, 0, 0), 2))
-                size = 10
-                painter.drawLine(px - size, py, px + size, py)
-                painter.drawLine(px, py - size, px, py + size)
-
-                # Círculo exterior
-                painter.setPen(QPen(QColor(255, 255, 0), 2))
-                painter.setBrush(Qt.NoBrush)
-                painter.drawEllipse(QPointF(px, py), 8, 8)
-
-                # Texto con número
-                painter.setPen(QPen(QColor(0, 255, 0), 1))
-                painter.drawText(QPointF(px + 12, py - 8), f"P{i+1}")
-
             # Ejes XYZ para orientar la calibración
             def _world_to_pixel(wx: float, wy: float):
                 calib = self.calib_service.get_calibration() if hasattr(self, "calib_service") else None
                 if not calib or calib.matrix is None:
                     return None
                 try:
-                    if calib.mode == CalibrationMode.LINEAR_2PT:
-                        sx = float(calib.matrix[0, 0])
-                        sy = float(calib.matrix[1, 1])
-                        tx = float(calib.matrix[0, 2])
-                        ty = float(calib.matrix[1, 2])
-                        if abs(sx) < 1e-9 or abs(sy) < 1e-9:
-                            return None
-                        px = (wx - tx) / sx
-                        py = (wy - ty) / sy
-                        return (px, py)
                     if calib.mode == CalibrationMode.HOMOGRAPHY:
                         inv = np.linalg.inv(calib.matrix)
                         vec = inv @ np.array([wx, wy, 1.0])
@@ -6061,7 +6196,7 @@ class ControlPanelV2(QMainWindow):
             def _draw_arrow(p0, p1, color: QColor, label: str):
                 if not p0 or not p1:
                     return
-                painter.setPen(QPen(color, 3))
+                painter.setPen(QPen(color, 1))
                 painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
                 vx = p1[0] - p0[0]
                 vy = p1[1] - p0[1]
@@ -6078,17 +6213,19 @@ class ControlPanelV2(QMainWindow):
                 painter.setPen(QPen(color, 1))
                 painter.drawText(QPointF(p1[0] + 4.0, p1[1] - 4.0), label)
 
-            # Representación compacta de ejes en la esquina superior izquierda
-            axis_len_px = max(18.0, min(w, h) * 0.05)
-            margin = 18.0
-            base = (margin, margin)
-            x_tip = (base[0] + axis_len_px, base[1])
-            y_tip = (base[0], base[1] - axis_len_px)
-            z_tip = (base[0] - axis_len_px * 0.5, base[1] - axis_len_px * 0.7)
+            # Representación compacta de ejes (solo mientras la malla esté visible)
+            if time.time() <= self._calib_grid_until:
+                axis_len_px = max(16.0, min(w, h) * 0.045)
+                margin_x = 18.0
+                margin_y = 60.0
+                base = (margin_x, margin_y)
+                x_tip = (base[0] + axis_len_px, base[1])
+                y_tip = (base[0], base[1] - axis_len_px)
+                z_tip = (base[0] - axis_len_px * 0.5, base[1] - axis_len_px * 0.7)
 
-            _draw_arrow(base, x_tip, QColor(239, 68, 68), "X+")
-            _draw_arrow(base, y_tip, QColor(34, 197, 94), "Y+")
-            _draw_arrow(base, z_tip, QColor(59, 130, 246), "Z+")
+                _draw_arrow(base, x_tip, QColor(239, 68, 68), "X+")
+                _draw_arrow(base, y_tip, QColor(34, 197, 94), "Y+")
+                _draw_arrow(base, z_tip, QColor(59, 130, 246), "Z+")
         finally:
             painter.end()
         return img_copy
@@ -6345,119 +6482,6 @@ class ControlPanelV2(QMainWindow):
         
         return positions
     
-    def _handle_calibration_click(self, px: int, py: int):
-        """Manejar click durante calibración (IGUAL A PANEL ONLY - SIN DIÁLOGOS)."""
-        if not self._calibrating:
-            return
-        
-        # ✅ Simplemente guardar el píxel clickeado
-        self._calib_points.append((px, py))
-        self._log(f"[CALIB] Punto {len(self._calib_points)}: píxel ({px}, {py})")
-        
-        # Si tenemos 4 puntos, calcular calibración automáticamente
-        if len(self._calib_points) >= 4:
-            self._finish_calibration()
-        else:
-            # Mostrar progreso
-            needed = 4 - len(self._calib_points)
-            self._set_status(f"CALIBRACIÓN: {len(self._calib_points)}/4 puntos - Click {needed} más", error=False)
-    
-    def _finish_calibration(self):
-        """Finalizar calibración calculando homografía automáticamente (IGUAL A PANEL ONLY)."""
-        if len(self._calib_points) < 4:
-            self._log("[CALIB] Calibración incompleta")
-            return
-        
-        # ✅ Extraer píxeles clickeados
-        p1_px, p1_py = self._calib_points[0]
-        p2_px, p2_py = self._calib_points[1]
-        p3_px, p3_py = self._calib_points[2]
-        p4_px, p4_py = self._calib_points[3]
-        
-        # ✅ Calcular coordenadas del mundo basadas en la tabla
-        # Asumimos que los 4 puntos son las esquinas de la mesa
-        cx = TABLE_CENTER_X
-        cy = TABLE_CENTER_Y
-        sx = TABLE_SIZE_X / 2.0
-        sy = TABLE_SIZE_Y / 2.0
-        
-        # Esquinas en coordenadas del mundo (arriba-izq, arriba-der, abajo-der, abajo-izq)
-        w1 = (cx - sx, cy + sy)   # Arriba-izq
-        w2 = (cx + sx, cy + sy)   # Arriba-der
-        w3 = (cx + sx, cy - sy)   # Abajo-der
-        w4 = (cx - sx, cy - sy)   # Abajo-izq
-        
-        # ✅ Validación mejorada: que los 4 puntos formen un cuadrilátero razonable
-        # Chequea distancias entre puntos consecutivos y diagonales
-        def dist(p1, p2):
-            return ((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)**0.5
-        
-        points = [(p1_px, p1_py), (p2_px, p2_py), (p3_px, p3_py), (p4_px, p4_py)]
-        
-        # Verificar que cada par de puntos adyacentes estén separados >= 20px
-        min_distance = 20
-        dist_12 = dist(points[0], points[1])
-        dist_23 = dist(points[1], points[2])
-        dist_34 = dist(points[2], points[3])
-        dist_41 = dist(points[3], points[0])
-        
-        self._log(f"[CALIB] Distancias: P1-P2={dist_12:.1f}px, P2-P3={dist_23:.1f}px, P3-P4={dist_34:.1f}px, P4-P1={dist_41:.1f}px")
-        
-        if min(dist_12, dist_23, dist_34, dist_41) < min_distance:
-            self._log(f"[CALIB] ERROR: puntos muy cercanos (mínimo {min_distance}px). Repite calibración.")
-            self._set_status(f"ERROR: puntos muy cercanos ({min_distance}px mín)", error=True)
-            self._calib_points = []  # ✅ LIMPIAR PUNTOS EN ERROR
-            self._set_status("Calibración reiniciada - click en 4 esquinas", error=False)
-            return
-        
-        # ✅ Calcular homografía
-        try:
-            pixel_points = [(float(p1_px), float(p1_py)), (float(p2_px), float(p2_py)),
-                           (float(p3_px), float(p3_py)), (float(p4_px), float(p4_py))]
-            world_points = [(float(w1[0]), float(w1[1])), (float(w2[0]), float(w2[1])),
-                           (float(w3[0]), float(w3[1])), (float(w4[0]), float(w4[1]))]
-
-            hom = None
-            # Intentar usar graspnet si está instalado
-            try:
-                from graspnet.utils.homography import compute_homography as g_compute
-                hom = g_compute(pixel_points, world_points)
-            except Exception as e:
-                self._log(f"[CALIB] Aviso: graspnet no disponible ({e}), usando OpenCV")
-                try:
-                    import numpy as np
-                    import cv2
-                    src = np.array(pixel_points, dtype=np.float32)
-                    dst = np.array(world_points, dtype=np.float32)
-                    hom, _ = cv2.findHomography(src, dst, method=0)
-                    if hom is not None:
-                        hom = hom.tolist()
-                except Exception as e_cv:
-                    raise RuntimeError(f"No se pudo calcular homografía: {e_cv}")
-
-            if not hom:
-                self._log("[CALIB] ERROR: homografía inválida. Repite calibración.")
-                self._set_status("ERROR: homografía inválida", error=True)
-                self._calib_points = []  # ✅ LIMPIAR PUNTOS EN ERROR
-                return
-            
-            # ✅ Enviar calibración al servicio
-            self.calib_service.set_homography(hom)
-            self._calibrating = False
-            self._calib_points = []  # ✅ LIMPIAR PUNTOS DESPUÉS DE ÉXITO
-            self.btn_calibrate.setText("Calibrar")
-            self._set_status(f"✅ Calibración completada ({dist_12:.0f}-{dist_34:.0f}px)", error=False)
-            self._log(f"[CALIB] ✅ Homografía completada y almacenada en servicio")
-            self._publish_calib_grid_marker()
-            self._post_calibration_pipeline()
-            self._refresh_objects_from_gz_async()
-            
-        except Exception as e:
-            self._log(f"[CALIB] ERROR calculando homografía: {e}")
-            self._set_status(f"ERROR: {e}", error=True)
-            self._calib_points = []  # ✅ LIMPIAR PUNTOS EN ERROR
-
-    
     def _handle_object_selection_click(self, px: int, py: int):
         """Manejar click en cámara para seleccionar objeto (igual a Panel Only)."""
         if not self._pick_ui_allowed():
@@ -6502,6 +6526,10 @@ class ControlPanelV2(QMainWindow):
     
     def _select_object(self, name: str, px: int, py: int, wx: float, wy: float, wz: float):
         """Seleccionar un objeto (desde click o desde lista)."""
+        if self._pickable_map_override is not None and not self._pickable_map_override.get(name, False):
+            self._set_status(f"Objeto no alcanzable: {name}", error=True)
+            self._emit_log(f"[PICK] Selección bloqueada: {name} no pickable")
+            return
         self._selected_object = name
         self._selected_px = (px, py)
         self._selected_world = (wx, wy, wz)
@@ -6759,9 +6787,21 @@ class ControlPanelV2(QMainWindow):
         if not hasattr(self, "obj_panel"):
             return
 
+        if self._flow_state not in (
+            FlowState.AUTO_CALIBRATED,
+            FlowState.PROCESS_OBJECTS,
+            FlowState.UPDATE_OBJECT_LIST,
+            FlowState.READY,
+        ):
+            self.obj_panel.update_objects({}, pickable={})
+            self.obj_panel.set_selected(None, "Selección: -")
+            return
+
         objects = get_object_positions() if self._gz_running else {}
+        if self._pickable_map_override is not None:
+            objects = {k: v for k, v in objects.items() if self._pickable_map_override.get(k)}
         pickable_map = {}
-        pickable_allowed = self._state_ready_moveit()
+        pickable_allowed = True
         if objects:
             if self._pickable_map_override:
                 for name, (x, y, _z) in objects.items():
@@ -6770,6 +6810,7 @@ class ControlPanelV2(QMainWindow):
                 for name, (x, y, _z) in objects.items():
                     pickable_map[name] = pickable_allowed and not object_out_of_reach(x, y)
         self.obj_panel.update_objects(objects, pickable=pickable_map)
+        self._emit_log(f"[UI] lista de objetos actualizada ({len(objects)})")
 
         sel_text = "Selección: -"
         if self._selected_object and self._selected_world:
@@ -7168,6 +7209,7 @@ class ControlPanelV2(QMainWindow):
                     self._emit_log("[TF][DIAG] helper no disponible, tf_ready_state=False")
                     self._last_tf_diag_log = now
                 self._tf_ready_state = False
+                self._tf_probe_ok_cycles = 0
                 self._maybe_log_tf_not_ready()
                 if prev_state:
                     self.signal_refresh_controls.emit()
@@ -7180,20 +7222,36 @@ class ControlPanelV2(QMainWindow):
                 self._tf_no_msgs_logged = True
             elif tf_stats[0] > 0 or tf_stats[1] > 0:
                 self._tf_no_msgs_logged = False
-            world_frame = self._last_selection_frame or WORLD_FRAME or "world"
-            final_base = self._wait_for_tf_ready(world_frame, helper)
-            if final_base:
-                if not self._tf_ready_state:
-                    self._log(f"[TRACE] TF ready (base={final_base})")
-                self._tf_ready_state = True
-                self._tf_not_ready_logged = False
-                self._base_frame_effective = final_base
-                self._bridge_ready = True
-                self.signal_trace_ready.emit()
-                if not prev_state:
-                    self.signal_tf_ready.emit(True)
-                    self.signal_refresh_controls.emit()
-                return
+            world_frame = WORLD_FRAME or "world"
+            base_frame = "base_link"
+            ee_frame = "tool0"
+            tf_world_base = helper.lookup_transform(base_frame, world_frame, timeout_sec=0.15)
+            tf_base_tool = helper.lookup_transform(ee_frame, base_frame, timeout_sec=0.15)
+            tf_ok = bool(tf_world_base) and bool(tf_base_tool)
+            if tf_ok:
+                self._tf_probe_ok_cycles += 1
+                if self._tf_probe_ok_cycles >= TF_PROBE_OK_CYCLES:
+                    if not self._tf_probe_logged_world_base:
+                        self._emit_log("[TF_PROBE] OK world -> base_link")
+                        self._tf_probe_logged_world_base = True
+                    if not self._tf_probe_logged_base_tool:
+                        self._emit_log("[TF_PROBE] OK base_link -> tool0")
+                        self._tf_probe_logged_base_tool = True
+                    if not self._tf_ready_state:
+                        self._log(f"[TRACE] TF ready (base={base_frame})")
+                    self._tf_ready_state = True
+                    self._tf_not_ready_logged = False
+                    self._base_frame_effective = base_frame
+                    self._bridge_ready = True
+                    self.signal_trace_ready.emit()
+                    if not prev_state:
+                        self.signal_tf_ready.emit(True)
+                        self.signal_refresh_controls.emit()
+                    return
+            else:
+                self._tf_probe_ok_cycles = 0
+                self._tf_probe_logged_world_base = False
+                self._tf_probe_logged_base_tool = False
             # Diagnóstico EE frame
             frames = helper.list_frames() if helper else set()
             ee_candidates = [f for f in frames if any(k in f.lower() for k in ("tool", "tcp", "ee", "flange", "wrist", "rg2", "hand", "ft"))]
@@ -7215,6 +7273,8 @@ class ControlPanelV2(QMainWindow):
             self._tf_ready_timer = QTimer(self)
             self._tf_ready_timer.setInterval(500)
             self._tf_ready_timer.timeout.connect(self._try_mark_tf_ready)
+        if self._flow_state == FlowState.INIT:
+            self._set_flow_state(FlowState.WAIT_TF, "esperando TF")
         self._tf_ready_timer.start()
 
     def _wait_for_tf_ready(self, world_frame: str, helper: Optional["TfHelper"]) -> Optional[str]:
